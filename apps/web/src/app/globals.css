@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+/* ── RECAFCO AuditFlow IMS — Design Tokens ─────────────────────────────────── */
+:root {
+  /* Surfaces */
+  --bg-base: #F8FAFC;
+  --bg-surface: #FFFFFF;
+  --bg-muted: #F1F5F9;
+  --bg-subtle: #F8FAFC;
+
+  /* Text */
+  --text-primary: #0F172A;
+  --text-secondary: #334155;
+  --text-muted: #64748B;
+  --text-disabled: #94A3B8;
+
+  /* Accent */
+  --brand-red: #DC2626;
+  --accent-primary: #2563EB;
+  --accent-hover: #1D4ED8;
+  --accent-soft: #DBEAFE;
+
+  /* Sidebar */
+  --sidebar-bg: #064E5F;
+  --sidebar-active: #0E7490;
+  --sidebar-text: #ECFEFF;
+  --sidebar-muted: #A5F3FC;
+
+  /* Borders */
+  --border-subtle: #F1F5F9;
+  --border-default: #E2E8F0;
+  --border-strong: #CBD5E1;
+
+  /* State */
+  --state-error: #DC2626;
+  --state-error-soft: #FEE2E2;
+  --state-warning: #D97706;
+  --state-warning-soft: #FEF3C7;
+  --state-success: #16A34A;
+  --state-success-soft: #DCFCE7;
+  --state-info: #2563EB;
+  --state-info-soft: #DBEAFE;
+
+  /* Typography */
+  --font-sans: "Inter", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
+}
+
+/* ── Base reset ─────────────────────────────────────────────────────────────── */
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbar (subtle, enterprise) ─────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: var(--border-strong);
+  border-radius: 3px;
+}

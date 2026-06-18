@@ -1,0 +1,655 @@
+// RECAFCO AuditFlow IMS — Prisma Schema
+// Prisma 7: datasource URL is configured in prisma.config.ts (for migrations)
+// and passed via PrismaClient constructor at runtime.
+// NOTE: Schema changes in dev applied via `prisma db push` (migrate reset blocked in AI session).
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Department ───────────────────────────────────────────────────────────────
+
+model Department {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  code        String   @unique
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users          User[]
+  workspaces     Workspace[]          @relation("WorkspaceDepartment")
+  taskLists      TaskList[]
+  documents      Document[]
+  checklists     AuditChecklist[]
+  checklistItems AuditChecklistItem[]
+  ncrCapas       NcrCapa[]
+
+  @@map("departments")
+}
+
+// ─── Role ────────────────────────────────────────────────────────────────────
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  displayName String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+
+  @@map("roles")
+}
+
+// ─── Permission ───────────────────────────────────────────────────────────────
+
+model Permission {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  displayName String
+  description String?
+  createdAt   DateTime @default(now())
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+// ─── RolePermission (join) ────────────────────────────────────────────────────
+
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// ─── User ─────────────────────────────────────────────────────────────────────
+
+model User {
+  id                 String    @id @default(cuid())
+  email              String    @unique
+  username           String    @unique
+  passwordHash       String
+  fullName           String
+  departmentId       String?
+  isActive           Boolean   @default(true)
+  mustChangePassword Boolean   @default(false)
+  passwordChangedAt  DateTime?
+  lastLoginAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  department       Department?       @relation(fields: [departmentId], references: [id])
+  userRoles        UserRole[]
+  auditLogs        AuditLog[]
+  ownedWorkspaces  Workspace[]       @relation("WorkspaceOwner")
+  createdTaskLists TaskList[]        @relation("TaskListCreator")
+  createdPages     Page[]            @relation("PageCreator")
+  assignedTasks    Task[]            @relation("TaskAssignee")
+  createdTasks     Task[]            @relation("TaskCreator")
+  taskComments     TaskComment[]     @relation("CommentAuthor")
+  activityEvents   ActivityEvent[]   @relation("ActivityActor")
+  notifications    Notification[]    @relation("NotificationRecipient")
+  ownedDocuments       Document[]       @relation("DocumentOwner")
+  createdDocuments     Document[]       @relation("DocumentCreator")
+  uploadedVersions     DocumentVersion[]@relation("VersionUploader")
+  uploadedAttachments  FileAttachment[] @relation("FileAttachmentUploader")
+  createdChecklists         AuditChecklist[]     @relation("ChecklistCreator")
+  responsibleChecklistItems AuditChecklistItem[] @relation("ItemResponsibleUser")
+  reviewerChecklistItems    AuditChecklistItem[] @relation("ItemReviewer")
+  createdChecklistItems     AuditChecklistItem[] @relation("ItemCreator")
+  submittedEvidence         ChecklistEvidence[]  @relation("EvidenceSubmitter")
+  reviewedEvidence          ChecklistEvidence[]  @relation("EvidenceReviewer")
+  raisedNcrCapas            NcrCapa[]            @relation("NcrRaisedBy")
+  assignedNcrCapas          NcrCapa[]            @relation("NcrAssignedTo")
+  verifiedNcrCapas          NcrCapa[]            @relation("NcrVerifiedBy")
+  closedNcrCapas            NcrCapa[]            @relation("NcrClosedBy")
+  ncrCapaComments           NcrCapaComment[]     @relation("NcrCapaCommentAuthor")
+  workspaceMemberships      WorkspaceMember[]    @relation("WorkspaceMemberships")
+  pinnedItems               WorkspacePinnedItem[] @relation("PinnedByUser")
+  linkedRecords             LinkedRecord[]        @relation("LinkedRecordCreator")
+
+  @@index([email])
+  @@index([username])
+  @@index([departmentId])
+  @@map("users")
+}
+
+// ─── UserRole (join) ──────────────────────────────────────────────────────────
+
+model UserRole {
+  userId    String
+  roleId    String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+// ─── AuditLog ─────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id            String   @id @default(cuid())
+  actorId       String?
+  action        String
+  entityType    String
+  entityId      String?
+  previousValue Json?
+  newValue      Json?
+  ipAddress     String?
+  userAgent     String?
+  createdAt     DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id])
+
+  @@index([actorId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ─── Workspace ────────────────────────────────────────────────────────────────
+
+model Workspace {
+  id           String   @id @default(cuid())
+  name         String
+  description  String?
+  status       String   @default("ACTIVE")
+  visibility   String   @default("PRIVATE")
+  ownerId      String
+  departmentId String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  owner        User               @relation("WorkspaceOwner", fields: [ownerId], references: [id])
+  department   Department?        @relation("WorkspaceDepartment", fields: [departmentId], references: [id])
+  taskLists    TaskList[]
+  tasks        Task[]
+  documents    Document[]
+  pages        Page[]
+  checklists   AuditChecklist[]
+  ncrCapas     NcrCapa[]
+  members      WorkspaceMember[]
+  pinnedItems  WorkspacePinnedItem[]
+
+  @@index([ownerId])
+  @@index([status])
+  @@index([visibility])
+  @@index([departmentId])
+  @@map("workspaces")
+}
+
+// ─── TaskList ─────────────────────────────────────────────────────────────────
+
+model TaskList {
+  id           String   @id @default(cuid())
+  workspaceId  String
+  departmentId String?
+  name         String
+  description  String?
+  sortOrder    Int      @default(0)
+  createdById  String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workspace  Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  department Department? @relation(fields: [departmentId], references: [id])
+  createdBy  User        @relation("TaskListCreator", fields: [createdById], references: [id])
+  tasks      Task[]
+
+  @@index([workspaceId])
+  @@index([departmentId])
+  @@map("task_lists")
+}
+
+// ─── Task ─────────────────────────────────────────────────────────────────────
+
+model Task {
+  id           String    @id @default(cuid())
+  workspaceId  String
+  taskListId   String
+  parentTaskId String?
+  title        String
+  description  String?
+  status       String    @default("TODO")
+  priority     String    @default("MEDIUM")
+  assigneeId   String?
+  createdById  String
+  dueDate      DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  workspace  Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  taskList   TaskList      @relation(fields: [taskListId], references: [id], onDelete: Cascade)
+  parentTask Task?         @relation("TaskSubtasks", fields: [parentTaskId], references: [id])
+  subtasks   Task[]        @relation("TaskSubtasks")
+  assignee   User?         @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  createdBy  User          @relation("TaskCreator", fields: [createdById], references: [id])
+  comments   TaskComment[]
+
+  @@index([workspaceId])
+  @@index([taskListId])
+  @@index([assigneeId])
+  @@index([status])
+  @@index([dueDate])
+  @@map("tasks")
+}
+
+// ─── TaskComment ──────────────────────────────────────────────────────────────
+
+model TaskComment {
+  id        String   @id @default(cuid())
+  taskId    String
+  authorId  String
+  body      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  task   Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  author User @relation("CommentAuthor", fields: [authorId], references: [id])
+
+  @@index([taskId])
+  @@map("task_comments")
+}
+
+// ─── ActivityEvent ────────────────────────────────────────────────────────────
+
+model ActivityEvent {
+  id         String   @id @default(cuid())
+  entityType String
+  entityId   String
+  actorId    String
+  action     String
+  summary    String
+  createdAt  DateTime @default(now())
+
+  actor User @relation("ActivityActor", fields: [actorId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@index([createdAt])
+  @@map("activity_events")
+}
+
+// ─── FileAttachment ───────────────────────────────────────────────────────────
+// Generic polymorphic attachment: tasks, pages, comments, evidence, NCR/CAPA.
+// No approval workflow. Files live on disk; only metadata stored here.
+
+model FileAttachment {
+  id               String   @id @default(cuid())
+  originalFileName String
+  storedFileName   String
+  storagePath      String
+  mimeType         String
+  fileSize         Int
+  checksum         String?
+  uploadedById     String
+  entityType       String
+  entityId         String
+  createdAt        DateTime @default(now())
+
+  uploadedBy User @relation("FileAttachmentUploader", fields: [uploadedById], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([uploadedById])
+  @@map("file_attachments")
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
+
+model Page {
+  id          String   @id @default(cuid())
+  workspaceId String
+  parentId    String?
+  title       String
+  content     String?
+  isHome      Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  createdById String
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  parent    Page?     @relation("PageChildren", fields: [parentId], references: [id])
+  children  Page[]    @relation("PageChildren")
+  createdBy User      @relation("PageCreator", fields: [createdById], references: [id])
+
+  @@index([workspaceId])
+  @@index([parentId])
+  @@map("pages")
+}
+
+// ─── Document ─────────────────────────────────────────────────────────────────
+
+model Document {
+  id               String    @id @default(cuid())
+  title            String
+  description      String?
+  documentNumber   String?
+  category         String    @default("GENERAL")
+  status           String    @default("DRAFT")
+  departmentId     String?
+  workspaceId      String?
+  taskId           String?
+  ownerId          String
+  createdById      String
+  currentVersionId String?
+  reviewDate       DateTime?
+  expiryDate       DateTime?
+  rejectionReason  String?
+  archivedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  department Department?       @relation(fields: [departmentId], references: [id])
+  workspace  Workspace?        @relation(fields: [workspaceId], references: [id])
+  owner      User              @relation("DocumentOwner", fields: [ownerId], references: [id])
+  createdBy  User              @relation("DocumentCreator", fields: [createdById], references: [id])
+  versions   DocumentVersion[]
+
+  @@index([status])
+  @@index([departmentId])
+  @@index([workspaceId])
+  @@index([ownerId])
+  @@index([category])
+  @@index([createdAt])
+  @@map("documents")
+}
+
+// ─── DocumentVersion ──────────────────────────────────────────────────────────
+
+model DocumentVersion {
+  id               String   @id @default(cuid())
+  documentId       String
+  versionNumber    Int
+  originalFileName String
+  storedFileName   String
+  storagePath      String
+  mimeType         String
+  fileSize         Int
+  checksum         String?
+  uploadedById     String
+  createdAt        DateTime @default(now())
+
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  uploadedBy User     @relation("VersionUploader", fields: [uploadedById], references: [id])
+
+  @@unique([documentId, versionNumber])
+  @@index([documentId])
+  @@map("document_versions")
+}
+
+// ─── Notification ─────────────────────────────────────────────────────────────
+
+model Notification {
+  id          String    @id @default(cuid())
+  recipientId String
+  category    String
+  title       String
+  message     String
+  entityType  String?
+  entityId    String?
+  readAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  recipient User @relation("NotificationRecipient", fields: [recipientId], references: [id])
+
+  @@index([recipientId])
+  @@index([recipientId, readAt])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+// ─── AuditChecklist ───────────────────────────────────────────────────────────
+
+model AuditChecklist {
+  id           String   @id @default(cuid())
+  name         String
+  description  String?
+  isoStandard  String?
+  workspaceId  String?
+  departmentId String?
+  createdById  String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workspace  Workspace?           @relation(fields: [workspaceId], references: [id])
+  department Department?          @relation(fields: [departmentId], references: [id])
+  createdBy  User                 @relation("ChecklistCreator", fields: [createdById], references: [id])
+  items      AuditChecklistItem[]
+
+  @@index([departmentId])
+  @@index([workspaceId])
+  @@map("audit_checklists")
+}
+
+// ─── AuditChecklistItem ───────────────────────────────────────────────────────
+
+model AuditChecklistItem {
+  id                String    @id @default(cuid())
+  checklistId       String
+  departmentId      String?
+  title             String
+  description       String?
+  isoClause         String?
+  responsibleUserId String?
+  reviewerId        String?
+  dueDate           DateTime?
+  status            String    @default("MISSING")
+  sortOrder         Int       @default(0)
+  reviewedAt        DateTime?
+  rejectionReason   String?
+  createdById       String
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  checklist       AuditChecklist      @relation(fields: [checklistId], references: [id], onDelete: Cascade)
+  department      Department?         @relation(fields: [departmentId], references: [id])
+  responsibleUser User?               @relation("ItemResponsibleUser", fields: [responsibleUserId], references: [id])
+  reviewer        User?               @relation("ItemReviewer", fields: [reviewerId], references: [id])
+  createdBy       User                @relation("ItemCreator", fields: [createdById], references: [id])
+  evidence        ChecklistEvidence[]
+  ncrCapas        NcrCapa[]
+
+  @@index([checklistId])
+  @@index([status])
+  @@index([departmentId])
+  @@map("audit_checklist_items")
+}
+
+// ─── ChecklistEvidence ────────────────────────────────────────────────────────
+// Evidence submission for a single checklist item.
+// File attachments stored via polymorphic FileAttachment (entityType = 'CHECKLIST_EVIDENCE').
+
+model ChecklistEvidence {
+  id              String    @id @default(cuid())
+  checklistItemId String
+  submittedById   String
+  status          String    @default("SUBMITTED")
+  notes           String?
+  reviewerId      String?
+  reviewedAt      DateTime?
+  rejectionReason String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  checklistItem AuditChecklistItem @relation(fields: [checklistItemId], references: [id], onDelete: Cascade)
+  submittedBy   User               @relation("EvidenceSubmitter", fields: [submittedById], references: [id])
+  reviewer      User?              @relation("EvidenceReviewer", fields: [reviewerId], references: [id])
+
+  @@index([checklistItemId])
+  @@index([status])
+  @@map("checklist_evidence")
+}
+
+// ─── NcrCapa ──────────────────────────────────────────────────────────────────
+// Non-Conformity Report / Corrective and Preventive Action record.
+// File attachments via polymorphic FileAttachment (entityType = 'NCR_CAPA').
+
+model NcrCapa {
+  id                String    @id @default(cuid())
+  ncrNumber         String?   @unique
+  title             String
+  description       String?
+  type              String    @default("NCR")        // NCR | CAPA | OBSERVATION
+  severity          String    @default("MINOR")      // Severity enum
+  status            String    @default("OPEN")       // NcrCapaStatus enum
+
+  // ISO context
+  isoClause         String?
+  workspaceId       String?
+  departmentId      String?
+  checklistItemId   String?
+
+  // People
+  raisedById        String
+  assignedToId      String?
+  verifiedById      String?
+  closedById        String?
+
+  // Root cause analysis and corrective/preventive actions
+  rootCause         String?
+  correctiveAction  String?
+  preventiveAction  String?
+
+  // Dates
+  dueDate           DateTime?
+  verifiedAt        DateTime?
+  closedAt          DateTime?
+  rejectionReason   String?
+
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  workspace     Workspace?          @relation(fields: [workspaceId], references: [id])
+  department    Department?         @relation(fields: [departmentId], references: [id])
+  checklistItem AuditChecklistItem? @relation(fields: [checklistItemId], references: [id])
+  raisedBy      User                @relation("NcrRaisedBy", fields: [raisedById], references: [id])
+  assignedTo    User?               @relation("NcrAssignedTo", fields: [assignedToId], references: [id])
+  verifiedBy    User?               @relation("NcrVerifiedBy", fields: [verifiedById], references: [id])
+  closedBy      User?               @relation("NcrClosedBy", fields: [closedById], references: [id])
+  comments      NcrCapaComment[]
+
+  @@index([status])
+  @@index([severity])
+  @@index([departmentId])
+  @@index([workspaceId])
+  @@index([raisedById])
+  @@index([assignedToId])
+  @@map("ncr_capa")
+}
+
+// ─── WorkspaceMember ──────────────────────────────────────────────────────────
+
+model WorkspaceMember {
+  id              String   @id @default(cuid())
+  workspaceId     String
+  userId          String
+  roleInWorkspace String   @default("MEMBER") // OWNER | MANAGER | MEMBER | VIEWER
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation("WorkspaceMemberships", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId])
+  @@index([userId])
+  @@map("workspace_members")
+}
+
+// ─── NcrCapaComment ───────────────────────────────────────────────────────────
+
+model NcrCapaComment {
+  id        String   @id @default(cuid())
+  ncrCapaId String
+  authorId  String
+  body      String
+  createdAt DateTime @default(now())
+
+  ncrCapa NcrCapa @relation(fields: [ncrCapaId], references: [id], onDelete: Cascade)
+  author  User    @relation("NcrCapaCommentAuthor", fields: [authorId], references: [id])
+
+  @@index([ncrCapaId])
+  @@map("ncr_capa_comments")
+}
+
+// ─── WorkspacePinnedItem ──────────────────────────────────────────────────────
+// Tracks pages (and potentially other items) pinned to a workspace overview.
+
+model WorkspacePinnedItem {
+  id          String   @id @default(cuid())
+  workspaceId String
+  entityType  String   // PAGE (extensible to TASK, DOCUMENT in future)
+  entityId    String
+  pinnedById  String
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  pinnedBy  User      @relation("PinnedByUser", fields: [pinnedById], references: [id])
+
+  @@unique([workspaceId, entityType, entityId])
+  @@index([workspaceId])
+  @@map("workspace_pinned_items")
+}
+
+// ─── LinkedRecord ─────────────────────────────────────────────────────────────
+// Generic bidirectional link between any two ISO entities.
+
+model LinkedRecord {
+  id          String   @id @default(cuid())
+  sourceType  String   // TASK | PAGE | DOCUMENT | CHECKLIST_ITEM | NCR_CAPA
+  sourceId    String
+  targetType  String
+  targetId    String
+  createdById String
+  createdAt   DateTime @default(now())
+
+  createdBy User @relation("LinkedRecordCreator", fields: [createdById], references: [id])
+
+  @@unique([sourceType, sourceId, targetType, targetId])
+  @@index([sourceType, sourceId])
+  @@index([targetType, targetId])
+  @@map("linked_records")
+}
+
+// ─── SystemErrorLog ───────────────────────────────────────────────────────────
+
+model SystemErrorLog {
+  id         String    @id @default(cuid())
+  source     String    // API | FRONTEND | REALTIME | STORAGE | DATABASE
+  severity   String    // INFO | WARNING | ERROR | CRITICAL
+  message    String
+  stack      String?
+  path       String?
+  userId     String?
+  metadata   Json?
+  resolvedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([severity])
+  @@index([source])
+  @@index([resolvedAt])
+  @@index([createdAt])
+  @@map("system_error_logs")
+}

@@ -1,0 +1,41 @@
+{
+  "name": "@auditflow/db",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Prisma schema, migrations, and database client for RECAFCO AuditFlow IMS",
+  "scripts": {
+    "db:generate": "prisma generate --schema=prisma/schema.prisma",
+    "db:migrate": "prisma migrate dev",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "db:push": "prisma db push --schema=prisma/schema.prisma",
+    "db:studio": "prisma studio",
+    "db:reset": "prisma migrate reset",
+    "db:seed": "ts-node --project tsconfig.json prisma/seed.ts",
+    "db:seed-demo": "ts-node --project tsconfig.json prisma/seed-demo.ts"
+  },
+  "prisma": {
+    "seed": "ts-node --project tsconfig.json prisma/seed.ts"
+  },
+  "exports": {
+    ".": {
+      "types": "./generated/prisma/index.d.ts",
+      "require": "./generated/prisma/index.js",
+      "import": "./generated/prisma/index.js"
+    }
+  },
+  "main": "./generated/prisma/index.js",
+  "types": "./generated/prisma/index.d.ts",
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "bcrypt": "^6.0.0",
+    "pg": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
+    "dotenv": "^16.0.0",
+    "prisma": "^7.8.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.3"
+  }
+}

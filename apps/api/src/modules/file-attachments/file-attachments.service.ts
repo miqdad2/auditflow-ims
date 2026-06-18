@@ -1,0 +1,482 @@
+import {
+  Injectable, NotFoundException, ForbiddenException,
+} from '@nestjs/common';
+import { Response } from 'express';
+import * as fs from 'fs';
+import { PrismaService } from '../../common/prisma.service';
+import { AuditLogService } from '../audit-log/audit-log.service';
+import { RealtimeService } from '../realtime/realtime.service';
+import { FileStorageService } from '../../common/file-storage.service';
+import { WorkspacesService } from '../workspaces/workspaces.service';
+
+// Elevated roles: can access all attachments regardless of workspace/department.
+const ELEVATED_ROLES = ['SUPER_ADMIN', 'IT_ADMIN', 'ISO_MANAGER', 'QHSE_USER', 'SUPER_USER'] as const;
+
+// storagePath is intentionally excluded — never returned to clients.
+const ATTACHMENT_SELECT = {
+  id: true,
+  originalFileName: true,
+  storedFileName: true,
+  mimeType: true,
+  fileSize: true,
+  checksum: true,
+  entityType: true,
+  entityId: true,
+  createdAt: true,
+  uploadedBy: { select: { id: true, fullName: true } },
+};
+
+@Injectable()
+export class FileAttachmentsService {
+  constructor(
+    private prisma: PrismaService,
+    private auditLog: AuditLogService,
+    private realtime: RealtimeService,
+    private fileStorage: FileStorageService,
+    private workspaces: WorkspacesService,
+  ) {}
+
+  private async resolveWorkspaceId(entityType: string, entityId: string): Promise<string | null> {
+    if (entityType === 'TASK') {
+      const t = await this.prisma.task.findUnique({ where: { id: entityId }, select: { workspaceId: true } });
+      return t?.workspaceId ?? null;
+    }
+    if (entityType === 'PAGE') {
+      const p = await this.prisma.page.findUnique({ where: { id: entityId }, select: { workspaceId: true } });
+      return p?.workspaceId ?? null;
+    }
+    if (entityType === 'NCR_CAPA') {
+      const n = await this.prisma.ncrCapa.findUnique({ where: { id: entityId }, select: { workspaceId: true } });
+      return n?.workspaceId ?? null;
+    }
+    return null;
+  }
+
+  async upload(
+    file: Express.Multer.File,
+    entityType: string,
+    entityId: string,
+    actorId: string,
+    actorRoles: string[] = [],
+    actorDeptId: string | null = null,
+  ) {
+    // For PAGE uploads: verify workspace access.
+    if (entityType === 'PAGE') {
+      await this.assertPageWorkspaceAccess(entityId, actorId, actorRoles, actorDeptId);
+    }
+
+    // For TASK uploads: verify the actor has access to the task's workspace.
+    if (entityType === 'TASK') {
+      const task = await this.prisma.task.findUnique({ where: { id: entityId }, select: { workspaceId: true } });
+      if (task?.workspaceId) {
+        await this.workspaces.assertWorkspaceAccess(task.workspaceId, actorId, actorRoles, actorDeptId);
+      }
+    }
+
+    // For NCR_CAPA uploads: verify workspace access.
+    if (entityType === 'NCR_CAPA') {
+      const ncr = await this.prisma.ncrCapa.findUnique({ where: { id: entityId }, select: { workspaceId: true } });
+      if (ncr?.workspaceId) {
+        await this.workspaces.assertWorkspaceAccess(ncr.workspaceId, actorId, actorRoles, actorDeptId);
+      }
+    }
+
+    const stored = await this.fileStorage.saveFile(file, `attachments/${entityType.toLowerCase()}`);
+
+    let attachment: Record<string, unknown>;
+    try {
+      attachment = await this.prisma.fileAttachment.create({
+        data: {
+          originalFileName: stored.originalFileName,
+          storedFileName:   stored.storedFileName,
+          storagePath:      stored.storagePath,
+          mimeType:         stored.mimeType,
+          fileSize:         stored.fileSize,
+          checksum:         stored.checksum,
+          uploadedById:     actorId,
+          entityType,
+          entityId,
+        },
+        select: ATTACHMENT_SELECT,
+      }) as Record<string, unknown>;
+    } catch (err) {
+      this.fileStorage.cleanupOrphanFile(stored.storagePath, `attachment.upload[${entityType}]`);
+      throw err;
+    }
+
+    await this.auditLog.log({
+      actorId,
+      action: 'UPLOADED',
+      entityType,
+      entityId,
+      newValue: {
+        attachmentId: attachment.id,
+        fileName: stored.originalFileName,
+        fileSize: stored.fileSize,
+      },
+    });
+
+    // Resolve workspace once — used for duplicate-document warning and realtime emit.
+    const wsId = await this.resolveWorkspaceId(entityType, entityId);
+    let warning: string | undefined;
+
+    if (wsId) {
+      // Soft duplicate check: warn if a controlled document with a similar name exists.
+      const baseName = stored.originalFileName.replace(/\.[^.]+$/, '').trim();
+      if (baseName) {
+        const existingDoc = await this.prisma.document.findFirst({
+          where: { workspaceId: wsId, title: { contains: baseName, mode: 'insensitive' } },
+          select: { title: true },
+        });
+        if (existingDoc) {
+          warning = `A controlled document named "${existingDoc.title}" already exists in this workspace. Consider linking it from the Document Library instead of uploading a duplicate file.`;
+        }
+      }
+      this.realtime.emitToWorkspace(wsId, 'attachment.created', { entityType, entityId, attachmentId: attachment.id });
+    }
+
+    return warning ? { ...attachment, warning } : attachment;
+  }
+
+  async findForEntity(
+    entityType: string,
+    entityId: string,
+    actorId?: string,
+    actorRoles?: string[],
+    actorDeptId?: string | null,
+  ) {
+    // For PAGE listings: verify the actor has access to the parent workspace.
+    if (entityType === 'PAGE' && actorId && actorRoles) {
+      await this.assertPageWorkspaceAccess(entityId, actorId, actorRoles, actorDeptId ?? null);
+    }
+    return this.prisma.fileAttachment.findMany({
+      where: { entityType, entityId },
+      select: ATTACHMENT_SELECT,
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  async download(
+    id: string,
+    actorId: string,
+    actorPermissions: string[],
+    actorRoles: string[],
+    actorDepartmentId: string | null,
+    res: Response,
+  ) {
+    const attachment = await this.prisma.fileAttachment.findUnique({ where: { id } });
+    if (!attachment) throw new NotFoundException('Attachment not found');
+
+    await this.assertEntityAccess(
+      attachment.entityType,
+      attachment.entityId,
+      actorId,
+      actorPermissions,
+      actorRoles,
+      actorDepartmentId,
+    );
+
+    if (!fs.existsSync(attachment.storagePath)) {
+      throw new NotFoundException('File not found on storage');
+    }
+
+    // Fire-and-forget — download must not stall if audit log fails
+    void this.auditLog.log({
+      actorId,
+      action: 'DOWNLOADED',
+      entityType: attachment.entityType,
+      entityId: attachment.entityId,
+      newValue: { attachmentId: id, fileName: attachment.originalFileName },
+    });
+
+    res.setHeader('Content-Type', attachment.mimeType);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${attachment.originalFileName}"`,
+    );
+    res.setHeader('Content-Length', attachment.fileSize);
+    fs.createReadStream(attachment.storagePath).pipe(res);
+  }
+
+  /**
+   * Called before uploading a file to a CHECKLIST_EVIDENCE entity.
+   * Verifies the actor is the submitter of the evidence record or an elevated role.
+   * Elevated roles (REVIEWER_ROLES) and global admins bypass this check.
+   */
+  async assertEvidenceUploadAccess(
+    evidenceId: string,
+    actorId: string,
+    actorPermissions: string[],
+    actorRoles: string[],
+  ): Promise<void> {
+    if (this.isGlobalAdmin(actorPermissions)) return;
+    if (actorRoles.some((r) => (ELEVATED_ROLES as readonly string[]).includes(r))) return;
+
+    const evidence = await this.prisma.checklistEvidence.findUnique({
+      where: { id: evidenceId },
+      select: { submittedById: true },
+    });
+    if (!evidence) throw new NotFoundException('Evidence record not found');
+
+    if (evidence.submittedById !== actorId) {
+      throw new ForbiddenException('You can only attach files to your own evidence submissions');
+    }
+  }
+
+  async delete(
+    id: string,
+    actorId: string,
+    actorPermissions: string[],
+    actorRoles: string[] = [],
+    actorDeptId: string | null = null,
+  ) {
+    const attachment = await this.prisma.fileAttachment.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        uploadedById: true,
+        entityType: true,
+        entityId: true,
+        originalFileName: true,
+        storagePath: true,
+      },
+    });
+    if (!attachment) throw new NotFoundException('Attachment not found');
+
+    const isAdmin    = this.isGlobalAdmin(actorPermissions);
+    const isElevated = actorRoles.some((r) => (ELEVATED_ROLES as readonly string[]).includes(r));
+
+    if (!isAdmin && !isElevated) {
+      // Must be the uploader
+      if (attachment.uploadedById !== actorId) {
+        throw new ForbiddenException('You can only delete your own attachments');
+      }
+
+      // Check if the actor has the required update permission on the entity type.
+      // Workspace MEMBERs who uploaded the file are exempt from the global update-perm check.
+      const updatePerm = this.updatePermFor(attachment.entityType);
+      if (updatePerm && !actorPermissions.includes(updatePerm)) {
+        // Try workspace MEMBER bypass for the uploader
+        const wsId = await this.resolveWorkspaceId(attachment.entityType, attachment.entityId);
+        if (wsId) {
+          const memberRole = await this.workspaces.getWorkspaceMemberRole(actorId, wsId);
+          if (!memberRole || !['MEMBER', 'MANAGER', 'OWNER'].includes(memberRole)) {
+            throw new ForbiddenException('You do not have permission to modify this entity');
+          }
+        } else {
+          throw new ForbiddenException('You do not have permission to modify this entity');
+        }
+      }
+
+      // For PAGE: verify the actor still has access to the parent workspace.
+      // This prevents deleting after workspace membership is revoked.
+      if (attachment.entityType === 'PAGE') {
+        await this.assertPageWorkspaceAccess(attachment.entityId, actorId, actorRoles, actorDeptId);
+      }
+
+      // For tasks: block deletion when task is locked (completed / cancelled)
+      if (attachment.entityType === 'TASK') {
+        const task = await this.prisma.task.findUnique({
+          where: { id: attachment.entityId },
+          select: { status: true },
+        });
+        if (task && ['COMPLETED', 'CANCELLED'].includes(task.status)) {
+          throw new ForbiddenException(
+            'Cannot delete attachments from a completed or cancelled task',
+          );
+        }
+      }
+    }
+
+    const { entityType, entityId } = attachment;
+    await this.prisma.fileAttachment.delete({ where: { id } });
+    this.fileStorage.deleteFile(attachment.storagePath);
+
+    await this.auditLog.log({
+      actorId,
+      action: 'DELETED',
+      entityType,
+      entityId,
+      previousValue: { attachmentId: id, fileName: attachment.originalFileName },
+    });
+
+    void this.resolveWorkspaceId(entityType, entityId).then((wsId) => {
+      if (wsId) {
+        this.realtime.emitToWorkspace(wsId, 'attachment.deleted', { entityType, entityId, attachmentId: id });
+      }
+    });
+  }
+
+  // ── Private: access matrix ──────────────────────────────────────────────────
+
+  /**
+   * Enforces entity-level read access for attachment download.
+   *
+   * Access rules (evaluated in order, first match wins):
+   *
+   * Layer 1 — Global admin bypass (users.manage or settings.manage)
+   * Layer 2 — Elevated role bypass (SUPER_ADMIN, IT_ADMIN, ISO_MANAGER, QHSE_USER)
+   * Layer 3 — TASK: requires tasks.read PLUS one of:
+   *   - task assignee, creator, workspace owner, or matching department
+   * Layer 4 — PAGE: requires pages.read PLUS workspace access
+   *   - Workspace visibility (ORGANIZATION / DEPARTMENT / PRIVATE) enforced via
+   *     WorkspacesService.assertWorkspaceAccess. storagePath is never returned.
+   * Layer 5 — CHECKLIST_EVIDENCE: submitter / reviewer / dept / checklist.review / APPROVED
+   * Layer 6 — NCR_CAPA: raiser / assignee / dept / ncr.verify / ncr.close
+   */
+  private async assertEntityAccess(
+    entityType: string,
+    entityId: string,
+    actorId: string,
+    actorPermissions: string[],
+    actorRoles: string[],
+    actorDepartmentId: string | null,
+  ): Promise<void> {
+    // Layer 1: global admin
+    if (this.isGlobalAdmin(actorPermissions)) return;
+
+    // Layer 2: elevated role
+    if (actorRoles.some((r) => (ELEVATED_ROLES as readonly string[]).includes(r))) return;
+
+    if (entityType === 'TASK') {
+      if (!actorPermissions.includes('tasks.read')) {
+        throw new ForbiddenException('Access denied to this attachment');
+      }
+
+      const task = await this.prisma.task.findUnique({
+        where: { id: entityId },
+        select: {
+          assigneeId:  true,
+          createdById: true,
+          workspaceId: true,
+          taskList:    { select: { departmentId: true } },
+          workspace:   { select: { ownerId: true } },
+        },
+      });
+
+      if (!task) throw new NotFoundException('Parent task not found');
+
+      const isAssignee  = task.assigneeId === actorId;
+      const isCreator   = task.createdById === actorId;
+      const isWsOwner   = task.workspace?.ownerId === actorId;
+      const deptMatch   = task.taskList?.departmentId !== null &&
+                          task.taskList?.departmentId === actorDepartmentId;
+
+      if (isAssignee || isCreator || isWsOwner || deptMatch) return;
+
+      // Workspace MEMBER can download task attachments in their workspace
+      if (task.workspaceId) {
+        const memberRole = await this.workspaces.getWorkspaceMemberRole(actorId, task.workspaceId);
+        if (memberRole) return;
+      }
+
+      throw new ForbiddenException(
+        'You do not have access to this task\'s attachments',
+      );
+    }
+
+    if (entityType === 'PAGE') {
+      if (!actorPermissions.includes('pages.read')) {
+        throw new ForbiddenException('Access denied to this attachment');
+      }
+
+      // Workspace access enforces visibility (ORGANIZATION / DEPARTMENT / PRIVATE).
+      // Elevated roles are already bypassed at Layer 2 above.
+      await this.assertPageWorkspaceAccess(entityId, actorId, actorRoles, actorDepartmentId);
+      return;
+    }
+
+    if (entityType === 'CHECKLIST_EVIDENCE') {
+      // Must have at least checklist.read or evidence.submit to attempt access
+      const hasRead   = actorPermissions.includes('checklist.read');
+      const hasSubmit = actorPermissions.includes('evidence.submit');
+      if (!hasRead && !hasSubmit) {
+        throw new ForbiddenException('Access denied to this evidence attachment');
+      }
+
+      const evidence = await this.prisma.checklistEvidence.findUnique({
+        where:   { id: entityId },
+        include: { checklistItem: true },
+      });
+      if (!evidence) throw new NotFoundException('Parent evidence not found');
+
+      // Submitter of this evidence record
+      if (evidence.submittedById === actorId) return;
+
+      // Reviewer assigned on the checklist item
+      if (evidence.checklistItem.reviewerId === actorId) return;
+
+      // Department match
+      if (
+        evidence.checklistItem.departmentId !== null &&
+        evidence.checklistItem.departmentId === actorDepartmentId
+      ) return;
+
+      // Has checklist.review — can see all evidence
+      if (actorPermissions.includes('checklist.review')) return;
+
+      // Read-only roles (e.g. AUDITOR_VIEWER): only APPROVED evidence attachments
+      if (hasRead && evidence.status === 'APPROVED') return;
+
+      throw new ForbiddenException('You do not have access to this evidence attachment');
+    }
+
+    if (entityType === 'NCR_CAPA') {
+      const hasRead = actorPermissions.includes('ncr.read');
+      if (!hasRead) throw new ForbiddenException('Access denied to this NCR/CAPA attachment');
+
+      const record = await this.prisma.ncrCapa.findUnique({
+        where: { id: entityId },
+        select: { raisedById: true, assignedToId: true, departmentId: true },
+      });
+      if (!record) throw new NotFoundException('Parent NCR/CAPA record not found');
+
+      // Raiser always has access
+      if (record.raisedById === actorId) return;
+      // Assignee has access
+      if (record.assignedToId === actorId) return;
+      // Department match
+      if (record.departmentId !== null && record.departmentId === actorDepartmentId) return;
+      // ncr.verify or ncr.close holders can access all NCR/CAPA attachments
+      if (actorPermissions.includes('ncr.verify') || actorPermissions.includes('ncr.close')) return;
+
+      throw new ForbiddenException('You do not have access to this NCR/CAPA attachment');
+    }
+  }
+
+  // ── Private: small helpers ──────────────────────────────────────────────────
+
+  private isGlobalAdmin(permissions: string[]): boolean {
+    return (
+      permissions.includes('users.manage') ||
+      permissions.includes('settings.manage')
+    );
+  }
+
+  private updatePermFor(entityType: string): string | null {
+    if (entityType === 'TASK')    return 'tasks.update';
+    if (entityType === 'PAGE')    return 'pages.update';
+    if (entityType === 'NCR_CAPA') return 'ncr.update';
+    return null;
+  }
+
+  /**
+   * Resolves the parent Page's workspaceId and delegates to
+   * WorkspacesService.assertWorkspaceAccess. All Pages belong to a workspace
+   * (Page.workspaceId is non-nullable), so no null-workspace fallback is needed.
+   * Elevated-role bypass is handled inside assertWorkspaceAccess.
+   */
+  private async assertPageWorkspaceAccess(
+    pageId: string,
+    actorId: string,
+    actorRoles: string[],
+    actorDeptId: string | null,
+  ): Promise<void> {
+    const page = await this.prisma.page.findUnique({
+      where: { id: pageId },
+      select: { workspaceId: true },
+    });
+    if (!page) throw new NotFoundException('Parent page not found');
+    await this.workspaces.assertWorkspaceAccess(page.workspaceId, actorId, actorRoles, actorDeptId);
+  }
+}
