@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { AlertTriangle, Plus, Search, Loader2, ExternalLink, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Plus, Search, X, Loader2, ExternalLink, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
 import { apiGet } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -44,7 +44,9 @@ export function WorkspaceNcrTab({ workspaceId, workspaceName, refreshKey, canCol
   const [showCreate, setShowCreate] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const canCreate = (user?.permissions?.includes('ncr.create') ?? false) || canCollaborate;
+  // Issue creation requires ncr.create permission specifically.
+  // Workspace collaboration (canCollaborate) does NOT automatically grant issue-creation rights.
+  const canCreate = user?.permissions?.includes('ncr.create') ?? false;
 
   const loadRecords = useCallback(async () => {
     if (!token) return;
@@ -65,64 +67,85 @@ export function WorkspaceNcrTab({ workspaceId, workspaceName, refreshKey, canCol
   const openCount   = records.filter((r) => r.status === 'OPEN' || r.status === 'IN_PROGRESS').length;
   const overdueCount = records.filter((r) => r.status === 'OVERDUE').length;
 
+  function getAge(createdAt: string) {
+    const days = Math.floor((Date.now() - new Date(createdAt).getTime()) / 86400000);
+    if (days === 0) return 'Today';
+    if (days === 1) return '1d';
+    return `${days}d`;
+  }
+
   const STATUS_TABS: Array<{ key: string; label: string }> = [
     { key: '', label: `All (${records.length})` },
     { key: 'OPEN', label: 'Open' },
     { key: 'IN_PROGRESS', label: 'In Progress' },
+    { key: 'WAITING_EVIDENCE', label: 'Waiting for Information' },
     { key: 'SUBMITTED', label: 'Submitted' },
     { key: 'VERIFIED', label: 'Verified' },
+    { key: 'REJECTED', label: 'Returned' },
+    { key: 'OVERDUE', label: 'Overdue' },
     { key: 'CLOSED', label: 'Closed' },
   ];
 
   return (
-    <div className="flex h-full flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between px-6 py-3" style={{ borderBottom: '1px solid var(--border-default)' }}>
-        <div className="flex items-center gap-3">
-          <form onSubmit={(e) => { e.preventDefault(); void loadRecords(); }} className="flex items-center gap-2">
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
-              <input
-                type="text" value={search} onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search issues…"
-                className="rounded-lg pl-8 pr-3 py-1.5 text-sm outline-none w-44"
-                style={{ backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-default)', color: 'var(--text-primary)' }}
-              />
-            </div>
-          </form>
-          <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-            {openCount > 0 && (
-              <span style={{ color: 'var(--state-error)' }}>
-                <strong>{openCount}</strong> open
-              </span>
-            )}
-            {overdueCount > 0 && (
-              <span style={{ color: 'var(--state-error)' }}>
-                · <strong>{overdueCount}</strong> overdue
-              </span>
-            )}
-            {openCount === 0 && overdueCount === 0 && (
-              <span>{records.length} record{records.length !== 1 ? 's' : ''}</span>
+    <div className="flex h-full w-full flex-col">
+      {/* Tab header */}
+      <div className="flex items-center justify-between px-6 py-4" style={{ borderBottom: '1px solid var(--border-default)' }}>
+        <div>
+          <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Issues &amp; Corrective Actions</h2>
+          <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
+            Track issues, assign responsibility, and verify completion.
+          </p>
+        </div>
+        {canCreate && (
+          <button onClick={() => setShowCreate(true)}
+            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-white"
+            style={{ backgroundColor: 'var(--accent-primary)' }}>
+            <Plus className="h-3.5 w-3.5" />Raise Issue
+          </button>
+        )}
+      </div>
+
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-2 px-6 py-2.5"
+        style={{ borderBottom: '1px solid var(--border-default)', backgroundColor: 'var(--bg-subtle)' }}>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5"
+            style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-surface)' }}>
+            <Search className="h-3.5 w-3.5 flex-shrink-0" style={{ color: 'var(--text-muted)' }} />
+            <input type="text" value={search} onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search issues…"
+              className="w-40 bg-transparent text-sm outline-none"
+              style={{ color: 'var(--text-primary)' }} />
+            {search && (
+              <button type="button" onClick={() => setSearch('')} style={{ color: 'var(--text-muted)' }}>
+                <X className="h-3 w-3" />
+              </button>
             )}
           </div>
+          {/* Status summary chips */}
+          {openCount > 0 && (
+            <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+              style={{ backgroundColor: 'var(--state-error-soft)', color: 'var(--state-error)' }}>
+              {openCount} open
+            </span>
+          )}
+          {overdueCount > 0 && (
+            <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+              style={{ backgroundColor: 'var(--state-error-soft)', color: 'var(--state-error)' }}>
+              {overdueCount} overdue
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => void loadRecords()}
-            className="rounded-lg p-1.5" style={{ border: '1px solid var(--border-default)', color: 'var(--text-muted)' }} title="Refresh">
+            className="rounded-lg p-1.5" style={{ border: '1px solid var(--border-default)', color: 'var(--text-muted)', backgroundColor: 'var(--bg-surface)' }} title="Refresh">
             <RefreshCw className="h-3.5 w-3.5" />
           </button>
           <Link href={`/ncr-capa?workspaceId=${workspaceId}`}
             className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs"
-            style={{ border: '1px solid var(--border-default)', color: 'var(--text-secondary)' }}>
+            style={{ border: '1px solid var(--border-default)', color: 'var(--text-secondary)', backgroundColor: 'var(--bg-surface)' }}>
             <ExternalLink className="h-3.5 w-3.5" />All Issues
           </Link>
-          {canCreate && (
-            <button onClick={() => setShowCreate(true)}
-              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-white"
-              style={{ backgroundColor: 'var(--accent-primary)' }}>
-              <Plus className="h-3.5 w-3.5" />Raise Issue
-            </button>
-          )}
         </div>
       </div>
 
@@ -131,7 +154,7 @@ export function WorkspaceNcrTab({ workspaceId, workspaceName, refreshKey, canCol
         style={{ borderBottom: '1px solid var(--border-default)', backgroundColor: 'var(--bg-surface)' }}>
         {STATUS_TABS.map(({ key, label }) => (
           <button key={key} type="button" onClick={() => setStatusFilter(key)}
-            className="border-b-2 px-4 py-2 text-xs -mb-px whitespace-nowrap transition-colors"
+            className="border-b-2 px-4 py-2 text-xs -mb-px whitespace-nowrap transition-colors outline-none"
             style={{
               borderColor: statusFilter === key ? 'var(--accent-primary)' : 'transparent',
               color:       statusFilter === key ? 'var(--accent-primary)' : 'var(--text-muted)',
@@ -152,12 +175,18 @@ export function WorkspaceNcrTab({ workspaceId, workspaceName, refreshKey, canCol
           <div className="flex flex-col items-center justify-center gap-3 py-16">
             <AlertTriangle className="h-10 w-10" style={{ color: 'var(--text-disabled)' }} />
             <p className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
-              {statusFilter ? 'No issues with this status' : 'No issues in this workspace'}
+              {statusFilter || search ? 'No issues match the current filter' : 'No issues in this workspace'}
             </p>
-            {canCreate && !statusFilter && (
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              {statusFilter || search
+                ? 'Try clearing the filter to see all issues.'
+                : 'Raise the first issue when a problem or corrective action needs to be tracked.'}
+            </p>
+            {canCreate && !statusFilter && !search && (
               <button onClick={() => setShowCreate(true)}
-                className="text-xs font-medium" style={{ color: 'var(--accent-primary)' }}>
-                Raise the first issue →
+                className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-white mt-1"
+                style={{ backgroundColor: 'var(--accent-primary)' }}>
+                <Plus className="h-3.5 w-3.5" />Raise First Issue
               </button>
             )}
           </div>
@@ -165,7 +194,7 @@ export function WorkspaceNcrTab({ workspaceId, workspaceName, refreshKey, canCol
           <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border-default)', backgroundColor: 'var(--bg-subtle)' }}>
-                {['Issue', 'Type', 'Priority', 'Status', 'Responsible Person', 'Due Date', 'Raised'].map((h) => (
+                {['Issue', 'Type', 'Priority', 'Status', 'Responsible Person', 'Due Date', 'Age', 'Raised'].map((h) => (
                   <th key={h} className="px-4 py-2.5 text-left text-xs font-medium" style={{ color: 'var(--text-muted)' }}>{h}</th>
                 ))}
               </tr>
@@ -198,6 +227,9 @@ export function WorkspaceNcrTab({ workspaceId, workspaceName, refreshKey, canCol
                   <td className="px-4 py-3 text-xs"
                     style={{ color: r.dueDate && new Date(r.dueDate) < new Date() && r.status !== 'CLOSED' ? 'var(--state-error)' : 'var(--text-secondary)' }}>
                     {r.dueDate ? new Date(r.dueDate).toLocaleDateString('en-GB') : '—'}
+                  </td>
+                  <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>
+                    {getAge(r.createdAt)}
                   </td>
                   <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>
                     {new Date(r.createdAt).toLocaleDateString('en-GB')}

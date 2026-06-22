@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Delete, Param, UseGuards,
+  Controller, Get, Post, Patch, Delete, Param, Body, UseGuards,
   UseInterceptors, UploadedFile, Res,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -13,7 +13,7 @@ import {
   extractUserPermissions,
   extractUserRoles,
 } from '../../common/permissions.guard';
-import { FileAttachmentsService } from './file-attachments.service';
+import { FileAttachmentsService, AttachmentMetaDto } from './file-attachments.service';
 
 @Controller()
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -23,22 +23,63 @@ export class FileAttachmentsController {
   // ─── Task attachments ──────────────────────────────────────────────────────
 
   @Post('tasks/:id/attachments')
-  @RequirePermissions('tasks.read')
+  @RequirePermissions('project.read')
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
   uploadToTask(
     @Param('id') id: string,
     @UploadedFile() file: Express.Multer.File,
+    @Body() body: Record<string, string>,
     @CurrentUser() user: Record<string, unknown>,
   ) {
     const actorRoles  = extractUserRoles(user);
     const actorDeptId = (user.departmentId as string | null) ?? null;
-    return this.svc.upload(file, 'TASK', id, user.id as string, actorRoles, actorDeptId);
+    // Parse optional expiry metadata from multipart body fields
+    const meta: AttachmentMetaDto = {
+      displayName:  body.displayName  || undefined,
+      issueDate:    body.issueDate    || undefined,
+      expiryDate:   body.expiryDate   || undefined,
+      reminderDays: body.reminderDays ? Number(body.reminderDays) : undefined,
+      notes:        body.notes        || undefined,
+    };
+    return this.svc.upload(file, 'TASK', id, user.id as string, actorRoles, actorDeptId, meta);
   }
 
   @Get('tasks/:id/attachments')
-  @RequirePermissions('tasks.read')
+  @RequirePermissions('project.read')
   listTaskAttachments(@Param('id') id: string) {
     return this.svc.findForEntity('TASK', id);
+  }
+
+  @Patch('attachments/:id/metadata')
+  @RequirePermissions('project.read')
+  updateAttachmentMetadata(
+    @Param('id') id: string,
+    @Body() body: AttachmentMetaDto,
+    @CurrentUser() user: Record<string, unknown>,
+  ) {
+    const actorRoles = extractUserRoles(user);
+    return this.svc.updateMetadata(id, body, user.id as string, actorRoles);
+  }
+
+  @Post('attachments/:id/renew')
+  @RequirePermissions('project.read')
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  renewAttachment(
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: Record<string, string>,
+    @CurrentUser() user: Record<string, unknown>,
+  ) {
+    const actorRoles  = extractUserRoles(user);
+    const actorDeptId = (user.departmentId as string | null) ?? null;
+    const meta: AttachmentMetaDto = {
+      displayName:  body.displayName  || undefined,
+      issueDate:    body.issueDate    || undefined,
+      expiryDate:   body.expiryDate   || undefined,
+      reminderDays: body.reminderDays ? Number(body.reminderDays) : undefined,
+      notes:        body.notes        || undefined,
+    };
+    return this.svc.renew(id, file, user.id as string, actorRoles, actorDeptId, meta);
   }
 
   // ─── Page attachments ──────────────────────────────────────────────────────
@@ -114,6 +155,22 @@ export class FileAttachmentsController {
   @RequirePermissions('ncr.read')
   listNcrCapaAttachments(@Param('id') id: string) {
     return this.svc.findForEntity('NCR_CAPA', id);
+  }
+
+  // ─── Expiry endpoints (Super User / Super Admin) ─────────────────────────
+
+  @Get('file-attachments/expiring')
+  @RequirePermissions('project.read')
+  getExpiringFiles(@CurrentUser() user: Record<string, unknown>) {
+    const actorRoles = extractUserRoles(user);
+    return this.svc.getExpiringFiles(user.id as string, actorRoles);
+  }
+
+  @Post('file-attachments/expiry-check')
+  @RequirePermissions('project.read')
+  runExpiryCheck(@CurrentUser() user: Record<string, unknown>) {
+    const actorRoles = extractUserRoles(user);
+    return this.svc.runExpiryCheck(user.id as string, actorRoles);
   }
 
   // ─── Download ─────────────────────────────────────────────────────────────

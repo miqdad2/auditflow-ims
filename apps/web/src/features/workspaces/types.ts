@@ -1,3 +1,34 @@
+export type WorkspaceOperationalStatus =
+  | 'INACTIVE'
+  | 'SETUP_REQUIRED'
+  | 'CRITICAL'
+  | 'NEEDS_ATTENTION'
+  | 'IN_PROGRESS'
+  | 'HEALTHY';
+
+export interface WorkspaceStatusReason {
+  code: string;
+  label: string;
+  severity: 'ERROR' | 'WARNING' | 'INFO';
+  count: number;
+}
+
+export interface WorkspaceOpMetrics {
+  openTasks: number;
+  inProgressTasks: number;
+  unassignedTasks: number;
+  overdueTasks: number;
+  waitingReviewTasks: number;
+  returnedTasks: number;
+  documentsUnderReview: number;
+  openIssues: number;
+  overdueIssues: number;
+  issuesWaitingVerification: number;
+  expiredFiles: number;
+  expiringFiles: number;
+  operationalMembers: number;
+}
+
 export interface WorkspaceOwner {
   id: string;
   fullName: string;
@@ -35,6 +66,10 @@ export interface WorkspaceSummary {
   createdAt: string;
   updatedAt: string;
   _count: { taskLists: number; tasks: number; members: number };
+  operationalStatus: WorkspaceOperationalStatus;
+  operationalStatusLabel: string;
+  operationalReasons: WorkspaceStatusReason[];
+  metrics: WorkspaceOpMetrics;
   summary: {
     readinessPercent: number;
     tasks: {
@@ -125,6 +160,7 @@ export interface TaskSummary {
   description: string | null;
   status: string;
   priority: string;
+  isReference: boolean;
   assigneeId: string | null;
   assignee: TaskUser | null;
   createdById: string;
@@ -135,6 +171,10 @@ export interface TaskSummary {
   updatedAt: string;
   taskList: { id: string; name: string };
   _count: { subtasks: number; comments: number };
+  recurrenceInterval: string;
+  recurrenceEndDate: string | null;
+  recurrenceSeriesId: string | null;
+  recurrenceParentId: string | null;
 }
 
 export interface TaskDetail extends TaskSummary {
@@ -151,6 +191,17 @@ export interface TaskComment {
   author: { id: string; fullName: string };
 }
 
+export interface ActivityEventMetadata {
+  previousStatus?: string;
+  newStatus?: string;
+  reason?: string | null;
+  source?: string;
+  isOverride?: boolean;
+  spawnedBySystem?: boolean;
+  sourceTaskId?: string;
+  nextDueDate?: string;
+}
+
 export interface ActivityEvent {
   id: string;
   entityType: string;
@@ -158,6 +209,7 @@ export interface ActivityEvent {
   actorId: string;
   action: string;
   summary: string;
+  metadata?: ActivityEventMetadata | null;
   createdAt: string;
   actor: { id: string; fullName: string };
 }

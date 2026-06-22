@@ -1,9 +1,37 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma.service';
+import {
+  computeWorkspaceOperationalStatus,
+  endOfDayKuwait,
+  type WorkspaceOperationalStatus,
+  type WorkspaceStatusReason,
+} from '../workspaces/workspace-status.helper';
 
 const ELEVATED_ROLES = ['SUPER_ADMIN', 'IT_ADMIN', 'ISO_MANAGER', 'QHSE_USER', 'SUPER_USER'] as const;
 
 type AccessTier = 'ELEVATED' | 'DEPT_MANAGER' | 'DEPT_USER' | 'AUDITOR' | 'STAFF';
+
+export interface WorkspaceStatusRow {
+  id: string;
+  name: string;
+  department: string | null;
+  memberCount: number;
+  openTasks: number;
+  inProgressTasks: number;
+  unassignedTasks: number;
+  overdueTasks: number;
+  waitingReviewTasks: number;
+  docsUnderReview: number;
+  openIssues: number;
+  overdueIssues: number;
+  issuesWaitingVerification: number;
+  expiringFiles: number;
+  expiredFiles: number;
+  lastActivity: string | null;
+  operationalStatus: WorkspaceOperationalStatus;
+  operationalStatusLabel: string;
+  operationalReasons: WorkspaceStatusReason[];
+}
 
 function getAccessTier(roles: string[]): AccessTier {
   if (roles.some((r) => (ELEVATED_ROLES as readonly string[]).includes(r))) return 'ELEVATED';
@@ -23,7 +51,8 @@ export class DashboardService {
     const in30  = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
     // ─── Where clauses scoped by access tier ──────────────────────────────────
-    const taskWhere     = this.buildTaskWhere(tier, actorId, actorDeptId);
+    // isReference: false — exclude reference-only items from all operational task KPIs
+    const taskWhere = { ...this.buildTaskWhere(tier, actorId, actorDeptId), isReference: false };
     const docWhere      = this.buildDocWhere(tier, actorId, actorDeptId);
     const ncrWhere      = this.buildNcrWhere(tier, actorId, actorDeptId);
     const checklistWhere = this.buildChecklistWhere(tier, actorId, actorDeptId);
@@ -31,14 +60,16 @@ export class DashboardService {
     const overdueTaskWhere = {
       ...taskWhere,
       parentTaskId: null as null | undefined,
+      isReference:  false,   // Reference items are not operational — exclude from overdue KPI
       dueDate: { lt: now },
       status: { notIn: ['COMPLETED', 'CANCELLED'] },
     };
 
     // My personal task assignments, workspace-access-scoped
     const myAssignmentWhere = {
-      assigneeId: actorId,
+      assigneeId:   actorId,
       parentTaskId: null as null | undefined,
+      isReference:  false,   // Reference items do not appear in the personal work queue
       status: { notIn: ['COMPLETED', 'CANCELLED'] },
       ...(tier !== 'ELEVATED' ? this.taskWsVis(tier, actorId, actorDeptId) : {}),
     };
@@ -60,6 +91,8 @@ export class DashboardService {
       pendingEvidenceReviews,
       unreadCount,
       recentNotifications,
+      taskFileExpiringSoon,
+      taskFileExpired,
       accessibleWorkspaces,
     ] = await Promise.all([
       // Task counts by status (role-scoped)
@@ -218,6 +251,21 @@ export class DashboardService {
         },
       }),
 
+      // Task file attachments expiring soon (within 30 days, active, not superseded)
+      // For elevated users: all; for others: return 0 (section hidden in UI)
+      tier === 'ELEVATED'
+        ? this.prisma.fileAttachment.count({
+            where: { entityType: 'TASK', isSuperseded: false, expiryDate: { gte: now, lte: in30 } },
+          }).catch(() => 0)
+        : Promise.resolve(0),
+
+      // Task file attachments already expired (not superseded)
+      tier === 'ELEVATED'
+        ? this.prisma.fileAttachment.count({
+            where: { entityType: 'TASK', isSuperseded: false, expiryDate: { lt: now } },
+          }).catch(() => 0)
+        : Promise.resolve(0),
+
       // Accessible workspace IDs for frontend socket room joining
       this.prisma.workspace.findMany({
         where: tier === 'ELEVATED'
@@ -300,6 +348,11 @@ export class DashboardService {
       overdue:         ncrStatusMap['OVERDUE'] ?? 0,
     };
 
+    // ─── Workspace status rows (elevated only, run after main queries) ────────
+    const workspaceStatusRows: WorkspaceStatusRow[] = tier === 'ELEVATED'
+      ? await this.getWorkspaceStatusRows(now)
+      : [];
+
     // ─── Shape department readiness ───────────────────────────────────────────
     const deptReadinessMap = new Map<string, {
       id: string; total: number; approved: number; submitted: number; rejected: number; missing: number;
@@ -360,7 +413,7 @@ export class DashboardService {
       total:            overdueTasksCount + ncrCapaSummary.overdue + expired,
     };
 
-    // ─── Pending reviews ──────────────────────────────────────────────────────
+    // ─── Pending reviews (Documents only — Evidence removed from active workflow)
     const pendingReviews = [
       ...(pendingDocReviews as Array<{ id: string; title: string; updatedAt: Date; department: { name: string } | null; createdBy: { fullName: string } }>).map((d) => ({
         type:        'DOCUMENT' as const,
@@ -369,14 +422,6 @@ export class DashboardService {
         submittedAt: d.updatedAt.toISOString(),
         submittedBy: d.createdBy.fullName,
         department:  d.department?.name ?? null,
-      })),
-      ...(pendingEvidenceReviews as Array<{ id: string; createdAt: Date; submittedBy: { fullName: string }; checklistItem: { title: string; department: { name: string } | null } }>).map((e) => ({
-        type:        'EVIDENCE' as const,
-        id:          e.id,
-        title:       e.checklistItem.title,
-        submittedAt: e.createdAt.toISOString(),
-        submittedBy: e.submittedBy.fullName,
-        department:  e.checklistItem.department?.name ?? null,
       })),
     ].sort((a, b) => a.submittedAt.localeCompare(b.submittedAt)).slice(0, 8);
 
@@ -396,11 +441,70 @@ export class DashboardService {
         unread: unreadCount,
         recent: recentNotifications,
       },
+      // Task file expiry summary (elevated/Super User only — others get zeros)
+      taskFileSummary: {
+        expiringSoon: taskFileExpiringSoon as number,
+        expired:      taskFileExpired     as number,
+      },
       // Fields for frontend socket room joining and workspace awareness
       accessibleWorkspaceIds: (accessibleWorkspaces as Array<{ id: string }>).map((w) => w.id),
       myWorkspacesCount:      accessibleWorkspaces.length,
+      activeWorkspaceCount:   accessibleWorkspaces.length,
+      workspaceStatusRows,
       lastUpdated:            now.toISOString(),
     };
+  }
+
+  /**
+   * Personal task scope for the current user.
+   * Returns all tasks assigned to the actor, scoped to accessible workspaces.
+   * Requires only project.read permission — used by My Tasks page.
+   * Part of Unit 60: shared authoritative task scope for Dashboard + My Tasks + My Workspaces.
+   */
+  async getMyTasks(actorId: string, actorRoles: string[], actorDeptId: string | null) {
+    const tier = getAccessTier(actorRoles);
+    const now  = new Date();
+    const eod  = endOfDayKuwait(now);
+    const wsVis = this.taskWsVis(tier, actorId, actorDeptId);
+
+    const tasks = await this.prisma.task.findMany({
+      where: {
+        assigneeId:   actorId,
+        parentTaskId: null,
+        ...wsVis,
+      },
+      orderBy: [{ updatedAt: 'desc' }],
+      take: 200, // safe upper bound; personal task lists are small
+      select: {
+        id:                 true,
+        title:              true,
+        status:             true,
+        priority:           true,
+        dueDate:            true,
+        updatedAt:          true,
+        createdAt:          true,
+        isReference:        true,
+        recurrenceInterval: true,
+        workspace: { select: { id: true, name: true } },
+        taskList:  { select: { id: true, name: true } },
+      },
+    });
+
+    const ACTIVE = new Set(['TODO', 'IN_PROGRESS', 'WAITING_REVIEW', 'REJECTED']);
+    const operational = tasks.filter((t) => !t.isReference);
+    const active      = operational.filter((t) => ACTIVE.has(t.status));
+
+    const summary = {
+      open:          active.length,
+      inProgress:    active.filter((t) => t.status === 'IN_PROGRESS').length,
+      waitingReview: active.filter((t) => t.status === 'WAITING_REVIEW').length,
+      returned:      active.filter((t) => t.status === 'REJECTED').length,
+      overdue:       active.filter((t) => t.dueDate !== null && new Date(t.dueDate) < eod).length,
+      completed:     tasks.filter((t) => t.status === 'COMPLETED').length,
+      total:         tasks.length,
+    };
+
+    return { summary, tasks };
   }
 
   // ─── Workspace visibility helpers (Unit 28 rules — no ORGANIZATION bypass) ──
@@ -487,5 +591,196 @@ export class DashboardService {
       return { AND: [{ departmentId: deptId }, wsVis] };
     }
     return wsVis;
+  }
+
+  private async getWorkspaceStatusRows(now: Date): Promise<WorkspaceStatusRow[]> {
+    const eod = endOfDayKuwait(now);
+
+    // ── Round 1: workspace-level batch queries ────────────────────────────────
+    const [workspaces, taskDetailRows, docsUnderReviewRows, ncrDetailRows, deptRows] = await Promise.all([
+      this.prisma.workspace.findMany({
+        where: { status: 'ACTIVE' },
+        orderBy: { name: 'asc' },
+        take: 50,
+        select: {
+          id: true,
+          name: true,
+          status: true,
+          departmentId: true,
+          updatedAt: true,
+          _count: { select: { members: true } },
+          department: { select: { name: true } },
+        },
+      }),
+      // Task detail rows for operational status engine (non-reference, parent tasks only)
+      this.prisma.task.findMany({
+        where: { parentTaskId: null },
+        select: {
+          id: true,
+          workspaceId: true,
+          status: true,
+          priority: true,
+          isReference: true,
+          assigneeId: true,
+          dueDate: true,
+        },
+      }).then((rows) => rows.filter((t) => {
+        // Filter to only workspaces we care about (loaded above) — post-fetch, no N+1
+        return true; // keep all; we will filter by workspaceId when we have the IDs
+      })),
+      this.prisma.document.groupBy({
+        by: ['workspaceId'],
+        where: { status: 'UNDER_REVIEW', workspaceId: { not: null } },
+        _count: { id: true },
+      }),
+      this.prisma.ncrCapa.findMany({
+        where: { status: { notIn: ['VERIFIED', 'CLOSED'] }, workspaceId: { not: null } },
+        select: { workspaceId: true, status: true, dueDate: true },
+      }),
+      // Department active status
+      this.prisma.department.findMany({ select: { id: true, isActive: true } }),
+    ]);
+
+    const workspaceIds = new Set(workspaces.map((ws) => ws.id));
+
+    // ── Round 2: file attachments ─────────────────────────────────────────────
+    const relevantTaskIds = taskDetailRows
+      .filter((t) => t.workspaceId !== null && workspaceIds.has(t.workspaceId))
+      .map((t) => t.id);
+
+    const fileAttachmentRows = relevantTaskIds.length > 0
+      ? await this.prisma.fileAttachment.findMany({
+          where: {
+            entityType: 'TASK',
+            entityId: { in: relevantTaskIds },
+            isSuperseded: false,
+            expiryDate: { not: null },
+          },
+          select: { entityId: true, expiryDate: true, reminderDays: true },
+        })
+      : [];
+
+    // ── Build lookup maps ─────────────────────────────────────────────────────
+    type TaskRow = typeof taskDetailRows[number];
+    const taskByWs = new Map<string, TaskRow[]>();
+    const taskIdToWs = new Map<string, string>();
+    for (const t of taskDetailRows) {
+      if (!t.workspaceId || !workspaceIds.has(t.workspaceId)) continue;
+      const arr = taskByWs.get(t.workspaceId) ?? [];
+      arr.push(t);
+      taskByWs.set(t.workspaceId, arr);
+      taskIdToWs.set(t.id, t.workspaceId);
+    }
+
+    type AttRow = typeof fileAttachmentRows[number];
+    const filesByWs = new Map<string, AttRow[]>();
+    for (const att of fileAttachmentRows) {
+      const wsId = taskIdToWs.get(att.entityId);
+      if (!wsId) continue;
+      const arr = filesByWs.get(wsId) ?? [];
+      arr.push(att);
+      filesByWs.set(wsId, arr);
+    }
+
+    type NcrRow = typeof ncrDetailRows[number];
+    const ncrByWs = new Map<string, NcrRow[]>();
+    for (const n of ncrDetailRows) {
+      if (!n.workspaceId || !workspaceIds.has(n.workspaceId)) continue;
+      const arr = ncrByWs.get(n.workspaceId) ?? [];
+      arr.push(n);
+      ncrByWs.set(n.workspaceId, arr);
+    }
+
+    type DocRow = { workspaceId: string | null; _count: { id: number } };
+    const docMap = new Map<string, number>();
+    for (const d of docsUnderReviewRows as DocRow[]) {
+      if (d.workspaceId) docMap.set(d.workspaceId, d._count.id);
+    }
+
+    const deptActiveMap = new Map<string, boolean>();
+    for (const d of deptRows) deptActiveMap.set(d.id, d.isActive);
+
+    // ── Per-workspace computation ─────────────────────────────────────────────
+    return workspaces.map((ws) => {
+      const wsTasks   = taskByWs.get(ws.id) ?? [];
+      const wsFiles   = filesByWs.get(ws.id) ?? [];
+      const wsNcrs    = ncrByWs.get(ws.id) ?? [];
+
+      const nonRefTasks   = wsTasks.filter((t) => !t.isReference);
+      const activeTasks   = nonRefTasks.filter((t) => !['COMPLETED', 'CANCELLED'].includes(t.status));
+
+      const inProgressTasks        = activeTasks.filter((t) => t.status === 'IN_PROGRESS').length;
+      const unassignedTasks        = activeTasks.filter((t) => !t.assigneeId).length;
+      const waitingReviewTasks     = activeTasks.filter((t) => t.status === 'WAITING_REVIEW').length;
+      const returnedTasks          = activeTasks.filter((t) => t.status === 'REJECTED').length;
+      const overdueCriticalHighTasks = nonRefTasks.filter((t) =>
+        !['COMPLETED', 'CANCELLED'].includes(t.status) &&
+        t.dueDate !== null && new Date(t.dueDate) < eod &&
+        ['CRITICAL', 'HIGH'].includes(t.priority),
+      ).length;
+      const overdueMediumLowTasks  = nonRefTasks.filter((t) =>
+        !['COMPLETED', 'CANCELLED'].includes(t.status) &&
+        t.dueDate !== null && new Date(t.dueDate) < eod &&
+        ['LOW', 'MEDIUM'].includes(t.priority),
+      ).length;
+
+      const expiredFiles  = wsFiles.filter((f) => f.expiryDate !== null && new Date(f.expiryDate) < eod).length;
+      const expiringFiles = wsFiles.filter((f) => {
+        if (!f.expiryDate) return false;
+        const expiry = new Date(f.expiryDate);
+        if (expiry < eod) return false;
+        const reminderMs = (f.reminderDays ?? 14) * 24 * 60 * 60 * 1000;
+        return expiry.getTime() - eod.getTime() <= reminderMs;
+      }).length;
+
+      const overdueIssues              = wsNcrs.filter((n) =>
+        n.status === 'OVERDUE' || (n.dueDate !== null && new Date(n.dueDate) < eod),
+      ).length;
+      const openIssues                 = wsNcrs.length;
+      const issuesWaitingVerification  = wsNcrs.filter((n) => n.status === 'SUBMITTED').length;
+      const docsUnderReview            = docMap.get(ws.id) ?? 0;
+
+      const opResult = computeWorkspaceOperationalStatus({
+        lifecycleStatus:            ws.status,
+        hasDepartment:              !!ws.departmentId,
+        departmentIsActive:         ws.departmentId ? (deptActiveMap.get(ws.departmentId) ?? true) : false,
+        operationalMembers:         ws._count.members,
+        openTasks:                  activeTasks.length,
+        inProgressTasks,
+        unassignedTasks,
+        overdueCriticalHighTasks,
+        overdueMediumLowTasks,
+        waitingReviewTasks,
+        returnedTasks,
+        documentsUnderReview:       docsUnderReview,
+        overdueIssues,
+        openIssues,
+        issuesWaitingVerification,
+        expiredFiles,
+        expiringFiles,
+      });
+
+      return {
+        id:                        ws.id,
+        name:                      ws.name,
+        department:                ws.department?.name ?? null,
+        memberCount:               ws._count.members,
+        openTasks:                 opResult.metrics.openTasks,
+        inProgressTasks:           opResult.metrics.inProgressTasks,
+        unassignedTasks:           opResult.metrics.unassignedTasks,
+        overdueTasks:              opResult.metrics.overdueTasks,
+        waitingReviewTasks:        opResult.metrics.waitingReviewTasks,
+        docsUnderReview,
+        openIssues:                opResult.metrics.openIssues,
+        overdueIssues:             opResult.metrics.overdueIssues,
+        issuesWaitingVerification: opResult.metrics.issuesWaitingVerification,
+        expiringFiles,
+        expiredFiles,
+        lastActivity:              ws.updatedAt.toISOString(),
+        operationalStatus:         opResult.status,
+        operationalStatusLabel:    opResult.label,
+        operationalReasons:        opResult.reasons,
+      };
+    });
   }
 }

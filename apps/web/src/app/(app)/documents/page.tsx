@@ -176,9 +176,11 @@ export default function DocumentsPage() {
         ) : documents.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-3 h-64">
             <FileText className="h-10 w-10" style={{ color: 'var(--text-muted)' }} />
-            <p className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>No documents found</p>
-            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-              {canCreate ? 'Click "Upload Document" to add your first ISO document.' : 'No documents match the current filters.'}
+            <p className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>No documents found.</p>
+            <p className="text-xs text-center max-w-xs" style={{ color: 'var(--text-muted)' }}>
+              {canCreate
+                ? 'Upload controlled documents, certificates, procedures, contracts, and official records.'
+                : 'No documents match the current filters.'}
             </p>
           </div>
         ) : (

@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { Prisma } from '@auditflow/db';
+import { randomUUID } from 'crypto';
 
 const logger = new Logger('ExceptionFilter');
 
@@ -66,6 +67,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const request = ctx.getRequest<Request>();
     const path = request?.url ?? 'unknown';
 
+    // Propagate or generate a correlation ID so log entries can be matched to errors
+    const correlationId =
+      (request?.headers?.['x-correlation-id'] as string | undefined) ?? randomUUID();
+    response.setHeader('X-Correlation-Id', correlationId);
+
     // Known HTTP exceptions (NestJS built-in, HttpException subclasses)
     if (exception instanceof HttpException) {
       const status = exception.getStatus();
@@ -80,6 +86,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       return response.status(status).json({
         statusCode: status,
         message: normalizedMessage,
+        correlationId,
         timestamp: new Date().toISOString(),
         path,
       });
@@ -89,11 +96,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
     if (exception instanceof Prisma.PrismaClientKnownRequestError) {
       const prismaErr = exception as Prisma.PrismaClientKnownRequestError;
       const mapped = mapPrismaError(prismaErr);
-      logger.warn(`Prisma ${prismaErr.code} on ${path}: ${prismaErr.message}`);
+      logger.warn(`[${correlationId}] Prisma ${prismaErr.code} on ${path}: ${prismaErr.message}`);
       return response.status(mapped.statusCode).json({
         statusCode: mapped.statusCode,
         message: mapped.message,
         errorCode: mapped.errorCode,
+        correlationId,
         timestamp: new Date().toISOString(),
         path,
       });
@@ -101,11 +109,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     // Prisma validation errors (bad input to query)
     if (exception instanceof Prisma.PrismaClientValidationError) {
-      logger.warn(`Prisma validation error on ${path}`);
+      logger.warn(`[${correlationId}] Prisma validation error on ${path}`);
       return response.status(HttpStatus.BAD_REQUEST).json({
         statusCode: HttpStatus.BAD_REQUEST,
         message: 'Invalid data provided. Please check your input.',
         errorCode: 'VALIDATION_ERROR',
+        correlationId,
         timestamp: new Date().toISOString(),
         path,
       });
@@ -113,7 +122,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     // Unhandled/unknown errors — log full error server-side, return generic message
     logger.error(
-      `Unhandled exception on ${path}: ${exception instanceof Error ? exception.message : String(exception)}`,
+      `[${correlationId}] Unhandled exception on ${path}: ${exception instanceof Error ? exception.message : String(exception)}`,
       exception instanceof Error ? exception.stack : undefined,
     );
 
@@ -121,6 +130,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
       message: 'An unexpected error occurred. The system administrator has been notified.',
       errorCode: 'INTERNAL_ERROR',
+      correlationId,
       timestamp: new Date().toISOString(),
       path,
     });

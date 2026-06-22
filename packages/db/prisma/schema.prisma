@@ -235,8 +235,26 @@ model Task {
   createdById  String
   dueDate      DateTime?
   completedAt  DateTime?
+  sortOrder    Int       @default(0) // display order within task list
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
+
+  // ── Reference flag ────────────────────────────────────────────────────────
+  // When true, this is an informational/reference item.
+  // Reference items are excluded from operational KPIs, Action Center alerts,
+  // and overdue notifications. Priority remains a valid real value (defaulting
+  // to LOW); isReference is the authoritative reference marker.
+  isReference        Boolean   @default(false)
+
+  // ── Recurrence fields ─────────────────────────────────────────────────────
+  // NONE | MONTHLY | QUARTERLY | SEMIANNUAL | ANNUAL
+  recurrenceInterval String    @default("NONE")
+  // If set, stop generating new occurrences after this date
+  recurrenceEndDate  DateTime?
+  // Groups all tasks in the same recurrence chain (set to cuid on creation)
+  recurrenceSeriesId String?
+  // The task ID that spawned this occurrence (used for idempotency check)
+  recurrenceParentId String?
 
   workspace  Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   taskList   TaskList      @relation(fields: [taskListId], references: [id], onDelete: Cascade)
@@ -248,9 +266,12 @@ model Task {
 
   @@index([workspaceId])
   @@index([taskListId])
+  @@index([taskListId, sortOrder])
   @@index([assigneeId])
   @@index([status])
   @@index([dueDate])
+  @@index([isReference])
+  @@index([recurrenceSeriesId])
   @@map("tasks")
 }
 
@@ -280,6 +301,7 @@ model ActivityEvent {
   actorId    String
   action     String
   summary    String
+  metadata   Json?    // Status changes: { previousStatus, newStatus, reason, source, isOverride }
   createdAt  DateTime @default(now())
 
   actor User @relation("ActivityActor", fields: [actorId], references: [id])
@@ -295,7 +317,7 @@ model ActivityEvent {
 // No approval workflow. Files live on disk; only metadata stored here.
 
 model FileAttachment {
-  id               String   @id @default(cuid())
+  id               String    @id @default(cuid())
   originalFileName String
   storedFileName   String
   storagePath      String
@@ -305,12 +327,26 @@ model FileAttachment {
   uploadedById     String
   entityType       String
   entityId         String
-  createdAt        DateTime @default(now())
+  createdAt        DateTime  @default(now())
 
-  uploadedBy User @relation("FileAttachmentUploader", fields: [uploadedById], references: [id])
+  // Expiry tracking fields (primarily used for TASK attachments)
+  displayName    String?   // Optional friendly display name
+  issueDate      DateTime? // When the document was issued
+  expiryDate     DateTime? // When the document expires
+  reminderDays   Int?      // Days before expiry to notify (e.g. 7 / 15 / 30 / 60 / 90)
+  notes          String?   // Optional notes about this file
+
+  // Renewal chain
+  isSuperseded   Boolean   @default(false) // True when replaced by a newer upload
+  renewedFromId  String?   // Points to the older file this renews
+
+  uploadedBy  User             @relation("FileAttachmentUploader", fields: [uploadedById], references: [id])
+  renewedFrom FileAttachment?  @relation("AttachmentRenewals", fields: [renewedFromId], references: [id])
+  renewals    FileAttachment[] @relation("AttachmentRenewals")
 
   @@index([entityType, entityId])
   @@index([uploadedById])
+  @@index([expiryDate])
   @@map("file_attachments")
 }
 
@@ -405,10 +441,13 @@ model Notification {
   id          String    @id @default(cuid())
   recipientId String
   category    String
+  severity    String    @default("INFO")  // INFO | WARNING | ERROR | CRITICAL
   title       String
   message     String
   entityType  String?
   entityId    String?
+  workspaceId String?   // cached for fast client routing, no FK constraint
+  deepLink    String?   // pre-computed client-side route
   readAt      DateTime?
   createdAt   DateTime  @default(now())
 
@@ -416,6 +455,7 @@ model Notification {
 
   @@index([recipientId])
   @@index([recipientId, readAt])
+  @@index([recipientId, category])
   @@index([createdAt])
   @@map("notifications")
 }

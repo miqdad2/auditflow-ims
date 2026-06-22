@@ -1,6 +1,13 @@
 import {
   Controller, Get, Post, Patch, Param, Body, UseGuards,
 } from '@nestjs/common';
+import { IsArray, IsString } from 'class-validator';
+
+class ReorderTaskListsDto {
+  @IsArray()
+  @IsString({ each: true })
+  orderedIds: string[];
+}
 import { JwtAuthGuard } from '../../common/jwt-auth.guard';
 import { PermissionsGuard, extractUserRoles } from '../../common/permissions.guard';
 import { RequirePermissions } from '../../common/require-permissions.decorator';
@@ -45,5 +52,16 @@ export class TaskListsController {
     @CurrentUser() user: Record<string, unknown>,
   ) {
     return this.svc.update(id, dto, user.id as string);
+  }
+
+  @Patch('workspaces/:workspaceId/task-lists/reorder')
+  @RequirePermissions('project.read')
+  reorder(
+    @Param('workspaceId') workspaceId: string,
+    @Body() dto: ReorderTaskListsDto,
+    @CurrentUser() user: Record<string, unknown>,
+  ) {
+    const roles = extractUserRoles(user);
+    return this.svc.reorder(workspaceId, dto.orderedIds, user.id as string, roles);
   }
 }

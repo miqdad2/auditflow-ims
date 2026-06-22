@@ -22,7 +22,7 @@ interface StagedMember {
 
 const ROLE_OPTIONS = [
   { value: 'VIEWER',  label: 'Viewer  — read-only' },
-  { value: 'MEMBER',  label: 'Member  — work on tasks/evidence' },
+  { value: 'MEMBER',  label: 'Member  — work on tasks, upload files, raise issues' },
   { value: 'MANAGER', label: 'Manager — manage work & members' },
   { value: 'OWNER',   label: 'Owner   — full control' },
 ];

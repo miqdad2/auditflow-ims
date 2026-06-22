@@ -1,10 +1,11 @@
 import {
-  Injectable, NotFoundException, ForbiddenException,
+  Injectable, NotFoundException, ForbiddenException, BadRequestException,
 } from '@nestjs/common';
 import { Response } from 'express';
 import * as fs from 'fs';
 import { PrismaService } from '../../common/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { FileStorageService } from '../../common/file-storage.service';
 import { WorkspacesService } from '../workspaces/workspaces.service';
@@ -24,7 +25,23 @@ const ATTACHMENT_SELECT = {
   entityId: true,
   createdAt: true,
   uploadedBy: { select: { id: true, fullName: true } },
+  // Expiry tracking fields
+  displayName:   true,
+  issueDate:     true,
+  expiryDate:    true,
+  reminderDays:  true,
+  notes:         true,
+  isSuperseded:  true,
+  renewedFromId: true,
 };
+
+export interface AttachmentMetaDto {
+  displayName?:  string;
+  issueDate?:    string; // ISO date string
+  expiryDate?:   string; // ISO date string
+  reminderDays?: number;
+  notes?:        string;
+}
 
 @Injectable()
 export class FileAttachmentsService {
@@ -34,6 +51,7 @@ export class FileAttachmentsService {
     private realtime: RealtimeService,
     private fileStorage: FileStorageService,
     private workspaces: WorkspacesService,
+    private notifications: NotificationsService,
   ) {}
 
   private async resolveWorkspaceId(entityType: string, entityId: string): Promise<string | null> {
@@ -59,6 +77,7 @@ export class FileAttachmentsService {
     actorId: string,
     actorRoles: string[] = [],
     actorDeptId: string | null = null,
+    meta?: AttachmentMetaDto,
   ) {
     // For PAGE uploads: verify workspace access.
     if (entityType === 'PAGE') {
@@ -81,6 +100,13 @@ export class FileAttachmentsService {
       }
     }
 
+    // Validate reminderDays — only 7 or 14 days accepted for new uploads
+    if (meta?.reminderDays !== undefined && meta.reminderDays !== null) {
+      if (![7, 14].includes(meta.reminderDays)) {
+        throw new BadRequestException('Reminder must be 7 or 14 days before expiry.');
+      }
+    }
+
     const stored = await this.fileStorage.saveFile(file, `attachments/${entityType.toLowerCase()}`);
 
     let attachment: Record<string, unknown>;
@@ -96,6 +122,12 @@ export class FileAttachmentsService {
           uploadedById:     actorId,
           entityType,
           entityId,
+          // Optional expiry metadata
+          displayName:  meta?.displayName  ?? null,
+          issueDate:    meta?.issueDate    ? new Date(meta.issueDate)  : null,
+          expiryDate:   meta?.expiryDate   ? new Date(meta.expiryDate) : null,
+          reminderDays: meta?.reminderDays ?? null,
+          notes:        meta?.notes        ?? null,
         },
         select: ATTACHMENT_SELECT,
       }) as Record<string, unknown>;
@@ -116,8 +148,25 @@ export class FileAttachmentsService {
       },
     });
 
-    // Resolve workspace once — used for duplicate-document warning and realtime emit.
+    // Resolve workspace once — used for expiry notification, duplicate-document warning and realtime emit.
     const wsId = await this.resolveWorkspaceId(entityType, entityId);
+
+    // If expiry metadata was provided and expiry is within the reminder window, create notification
+    if (meta?.expiryDate && meta.reminderDays) {
+      const expiry = new Date(meta.expiryDate);
+      const daysUntil = Math.ceil((expiry.getTime() - Date.now()) / 86400000);
+      if (daysUntil >= 0 && daysUntil <= meta.reminderDays) {
+        void this.notifications.create({
+          recipientId: actorId,
+          title:       'Task file expiring soon',
+          message:     `"${meta.displayName ?? stored.originalFileName}" expires in ${daysUntil} day${daysUntil !== 1 ? 's' : ''}.`,
+          category:    'FILE_EXPIRING',
+          entityType,
+          entityId,
+          workspaceId: wsId ?? undefined,
+        }).catch(() => {});
+      }
+    }
     let warning: string | undefined;
 
     if (wsId) {
@@ -444,6 +493,144 @@ export class FileAttachmentsService {
     }
   }
 
+  // ── Expiry check: for Super User / Super Admin ────────────────────────────
+
+  async getExpiringFiles(actorId: string, actorRoles: string[]) {
+    const isElevated = actorRoles.some((r) => (ELEVATED_ROLES as readonly string[]).includes(r));
+    if (!isElevated) throw new ForbiddenException('Only elevated roles can access the expiring files list');
+
+    const now  = new Date();
+    const in90 = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
+
+    // Get all active task files with expiry date (expired or expiring within 90 days)
+    const files = await this.prisma.fileAttachment.findMany({
+      where: {
+        entityType:   'TASK',
+        isSuperseded: false,
+        expiryDate:   { not: null, lte: in90 },
+      },
+      select: {
+        id: true,
+        originalFileName: true,
+        displayName:      true,
+        issueDate:        true,
+        expiryDate:       true,
+        reminderDays:     true,
+        notes:            true,
+        isSuperseded:     true,
+        createdAt:        true,
+        entityId:         true,
+        uploadedBy:       { select: { id: true, fullName: true } },
+      },
+      orderBy: { expiryDate: 'asc' },
+      take: 100,
+    });
+
+    if (files.length === 0) return [];
+
+    // Resolve task details for each file
+    const taskIds = [...new Set(files.map((f) => f.entityId))];
+    const tasks = await this.prisma.task.findMany({
+      where: { id: { in: taskIds } },
+      select: {
+        id:         true,
+        title:      true,
+        assigneeId: true,
+        workspaceId: true,
+        workspace:  { select: { id: true, name: true } },
+        assignee:   { select: { id: true, fullName: true } },
+      },
+    });
+    const taskMap = new Map(tasks.map((t) => [t.id, t]));
+
+    const nowMs = now.getTime();
+    return files.map((f) => ({
+      ...f,
+      task: taskMap.get(f.entityId) ?? null,
+      daysUntilExpiry: f.expiryDate
+        ? Math.ceil((new Date(f.expiryDate).getTime() - nowMs) / 86400000)
+        : null,
+    }));
+  }
+
+  async runExpiryCheck(actorId: string, actorRoles: string[]) {
+    const isElevated = actorRoles.some((r) => (ELEVATED_ROLES as readonly string[]).includes(r));
+    if (!isElevated) throw new ForbiddenException('Only elevated roles can run the expiry check');
+
+    const now = new Date();
+
+    // Scan all active task file attachments with expiry set
+    const files = await this.prisma.fileAttachment.findMany({
+      where: { entityType: 'TASK', isSuperseded: false, expiryDate: { not: null } },
+      select: {
+        id:           true,
+        originalFileName: true,
+        displayName:  true,
+        expiryDate:   true,
+        reminderDays: true,
+        entityId:     true,
+        uploadedById: true,
+      },
+    });
+
+    // Get task info for assignee lookups
+    const taskIds = [...new Set(files.map((f) => f.entityId))];
+    const tasks = taskIds.length > 0
+      ? await this.prisma.task.findMany({
+          where: { id: { in: taskIds } },
+          select: { id: true, assigneeId: true, workspaceId: true },
+        })
+      : [];
+    const taskMap = new Map(tasks.map((t) => [t.id, t]));
+
+    let expiringSoon = 0;
+    let expired = 0;
+    let notificationsCreated = 0;
+
+    for (const file of files) {
+      if (!file.expiryDate) continue;
+      const expiry     = new Date(file.expiryDate);
+      const daysLeft   = Math.ceil((expiry.getTime() - now.getTime()) / 86400000);
+      const window     = file.reminderDays ?? 30;
+      const name       = file.displayName ?? file.originalFileName;
+      const task       = taskMap.get(file.entityId);
+
+      let message: string | null = null;
+      let isExpired = false;
+
+      if (daysLeft < 0) {
+        expired++;
+        isExpired = true;
+        message = `File "${name}" has expired.`;
+      } else if (daysLeft <= window) {
+        expiringSoon++;
+        message = `File "${name}" will expire in ${daysLeft} day${daysLeft !== 1 ? 's' : ''}.`;
+      }
+
+      if (message) {
+        const recipientIds = new Set([file.uploadedById]);
+        if (task?.assigneeId) recipientIds.add(task.assigneeId);
+
+        for (const recipientId of recipientIds) {
+          try {
+            await this.notifications.create({
+              recipientId,
+              title:      isExpired ? 'Task file expired' : 'Task file expiring soon',
+              message,
+              category:   isExpired ? 'FILE_EXPIRED' : 'FILE_EXPIRING',
+              entityType: 'TASK',
+              entityId:   file.entityId,
+              workspaceId: task?.workspaceId ?? undefined,
+            });
+            notificationsCreated++;
+          } catch { /* ignore notification failures */ }
+        }
+      }
+    }
+
+    return { scanned: files.length, expiringSoon, expired, notificationsCreated };
+  }
+
   // ── Private: small helpers ──────────────────────────────────────────────────
 
   private isGlobalAdmin(permissions: string[]): boolean {
@@ -478,5 +665,164 @@ export class FileAttachmentsService {
     });
     if (!page) throw new NotFoundException('Parent page not found');
     await this.workspaces.assertWorkspaceAccess(page.workspaceId, actorId, actorRoles, actorDeptId);
+  }
+
+  // ── Expiry metadata: update ───────────────────────────────────────────────
+
+  async updateMetadata(
+    id: string,
+    meta: AttachmentMetaDto,
+    actorId: string,
+    actorRoles: string[] = [],
+  ) {
+    const att = await this.prisma.fileAttachment.findUnique({
+      where: { id },
+      select: { id: true, uploadedById: true, entityType: true, entityId: true },
+    });
+    if (!att) throw new NotFoundException('Attachment not found');
+
+    const isElevated = actorRoles.some((r) => (ELEVATED_ROLES as readonly string[]).includes(r));
+    const isOwner    = att.uploadedById === actorId;
+    if (!isElevated && !isOwner) {
+      throw new ForbiddenException('Only the uploader or an elevated role can update file metadata');
+    }
+
+    // Validate reminderDays when being changed — only 7 or 14 accepted
+    if (meta.reminderDays !== undefined && meta.reminderDays !== null) {
+      if (![7, 14].includes(meta.reminderDays)) {
+        throw new BadRequestException('Reminder must be 7 or 14 days before expiry.');
+      }
+    }
+
+    const updated = await this.prisma.fileAttachment.update({
+      where: { id },
+      data: {
+        displayName:  meta.displayName  ?? undefined,
+        issueDate:    meta.issueDate    ? new Date(meta.issueDate)  : undefined,
+        expiryDate:   meta.expiryDate   ? new Date(meta.expiryDate) : undefined,
+        reminderDays: meta.reminderDays ?? undefined,
+        notes:        meta.notes        ?? undefined,
+      },
+      select: ATTACHMENT_SELECT,
+    });
+
+    void this.auditLog.log({
+      actorId,
+      action: 'UPDATED',
+      entityType: att.entityType,
+      entityId:   att.entityId,
+      newValue:   { attachmentId: id, expiryDate: meta.expiryDate, displayName: meta.displayName },
+    });
+
+    return updated;
+  }
+
+  // ── Renewal: upload a new file that supersedes an existing one ────────────
+
+  async renew(
+    oldAttachmentId: string,
+    file: Express.Multer.File,
+    actorId: string,
+    actorRoles: string[] = [],
+    actorDeptId: string | null = null,
+    meta?: AttachmentMetaDto,
+  ) {
+    const old = await this.prisma.fileAttachment.findUnique({
+      where: { id: oldAttachmentId },
+      select: {
+        id: true, uploadedById: true, entityType: true, entityId: true,
+        originalFileName: true, isSuperseded: true,
+      },
+    });
+    if (!old) throw new NotFoundException('Attachment not found');
+    if (old.isSuperseded) throw new ForbiddenException('This file has already been renewed');
+
+    const isElevated = actorRoles.some((r) => (ELEVATED_ROLES as readonly string[]).includes(r));
+    const isOwner    = old.uploadedById === actorId;
+    if (!isElevated && !isOwner) {
+      throw new ForbiddenException('Only the uploader or an elevated role can renew a file');
+    }
+
+    // Check task workspace access
+    if (old.entityType === 'TASK') {
+      const task = await this.prisma.task.findUnique({
+        where: { id: old.entityId }, select: { workspaceId: true, assigneeId: true },
+      });
+      if (task?.workspaceId) {
+        await this.workspaces.assertWorkspaceAccess(task.workspaceId, actorId, actorRoles, actorDeptId);
+      }
+
+      // Store file
+      const stored = await this.fileStorage.saveFile(file, `attachments/${old.entityType.toLowerCase()}`);
+      let newAtt: Record<string, unknown>;
+      try {
+        // Create new attachment
+        newAtt = await this.prisma.fileAttachment.create({
+          data: {
+            originalFileName: stored.originalFileName,
+            storedFileName:   stored.storedFileName,
+            storagePath:      stored.storagePath,
+            mimeType:         stored.mimeType,
+            fileSize:         stored.fileSize,
+            checksum:         stored.checksum,
+            uploadedById:     actorId,
+            entityType:       old.entityType,
+            entityId:         old.entityId,
+            displayName:      meta?.displayName  ?? null,
+            issueDate:        meta?.issueDate    ? new Date(meta.issueDate)  : null,
+            expiryDate:       meta?.expiryDate   ? new Date(meta.expiryDate) : null,
+            reminderDays:     meta?.reminderDays ?? null,
+            notes:            meta?.notes        ?? null,
+            renewedFromId:    old.id,
+          },
+          select: ATTACHMENT_SELECT,
+        });
+      } catch (err) {
+        this.fileStorage.cleanupOrphanFile(stored.storagePath, `attachment.renew[${old.id}]`);
+        throw err;
+      }
+
+      // Mark old file as superseded
+      await this.prisma.fileAttachment.update({
+        where: { id: old.id },
+        data:  { isSuperseded: true },
+      });
+
+      void this.auditLog.log({
+        actorId,
+        action:     'UPLOADED',
+        entityType: old.entityType,
+        entityId:   old.entityId,
+        newValue:   { renewal: true, oldAttachmentId: old.id, newAttachmentId: (newAtt as { id: string }).id },
+      });
+
+      // Notify task assignee and uploader of old file
+      const assigneeId = task?.assigneeId;
+      const notifyIds = new Set([old.uploadedById, ...(assigneeId ? [assigneeId] : [])].filter((id) => id !== actorId));
+      const fileName = meta?.displayName ?? stored.originalFileName;
+      for (const recipientId of notifyIds) {
+        void this.notifications.create({
+          recipientId,
+          title:      'Task file renewed',
+          message:    `"${fileName}" has been renewed.`,
+          category:   'FILE_RENEWED',
+          entityType: old.entityType,
+          entityId:   old.entityId,
+          workspaceId: task?.workspaceId ?? undefined,
+        }).catch(() => {});
+      }
+
+      // Realtime
+      const wsId = await this.resolveWorkspaceId(old.entityType, old.entityId);
+      if (wsId) {
+        this.realtime.emitToWorkspace(wsId, 'attachment.created', {
+          entityType: old.entityType, entityId: old.entityId, renewal: true,
+        });
+      }
+
+      return newAtt;
+    }
+
+    throw new ForbiddenException('Renewal is only supported for TASK attachments');
   }
 }

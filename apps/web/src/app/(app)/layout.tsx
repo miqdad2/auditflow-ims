@@ -7,6 +7,7 @@ import { AppSidebar } from '@/components/app-sidebar';
 import { AppHeader } from '@/components/app-header';
 import { SocketProvider } from '@/lib/socket-provider';
 import { ToastProvider } from '@/lib/toast-provider';
+import { NotificationToastManager } from '@/features/notifications/notification-toast-manager';
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -55,6 +56,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <main className="flex-1 overflow-auto pt-14 p-6">{children}</main>
           </div>
         </div>
+        {/* Rich notification toasts — outside main flow so they overlay everything */}
+        <NotificationToastManager />
       </ToastProvider>
     </SocketProvider>
   );

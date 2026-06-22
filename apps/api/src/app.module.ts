@@ -24,6 +24,8 @@ import { UsersModule } from './modules/users/users.module';
 import { RealtimeModule } from './modules/realtime/realtime.module';
 import { LinkedRecordsModule } from './modules/linked-records/linked-records.module';
 import { SystemErrorsModule } from './modules/system-errors/system-errors.module';
+import { ReportsModule } from './modules/reports/reports.module';
+import { BusinessActionsModule } from './modules/business-actions/business-actions.module';
 
 @Module({
   imports: [
@@ -47,6 +49,8 @@ import { SystemErrorsModule } from './modules/system-errors/system-errors.module
     DashboardModule,
     LinkedRecordsModule,
     SystemErrorsModule,
+    ReportsModule,
+    BusinessActionsModule,
   ],
   controllers: [AppController],
   providers: [

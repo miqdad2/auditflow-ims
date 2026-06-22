@@ -80,7 +80,7 @@ export interface AssignedTask {
 }
 
 export interface PendingReview {
-  type: 'DOCUMENT' | 'EVIDENCE';
+  type: 'DOCUMENT';
   id: string;
   title: string;
   submittedAt: string;
@@ -99,6 +99,43 @@ export interface NotificationItem {
   entityId: string | null;
 }
 
+export type WorkspaceOperationalStatus =
+  | 'INACTIVE'
+  | 'SETUP_REQUIRED'
+  | 'CRITICAL'
+  | 'NEEDS_ATTENTION'
+  | 'IN_PROGRESS'
+  | 'HEALTHY';
+
+export interface WorkspaceStatusReason {
+  code: string;
+  label: string;
+  severity: 'ERROR' | 'WARNING' | 'INFO';
+  count: number;
+}
+
+export interface WorkspaceStatusRow {
+  id: string;
+  name: string;
+  department: string | null;
+  memberCount: number;
+  openTasks: number;
+  inProgressTasks: number;
+  unassignedTasks: number;
+  overdueTasks: number;
+  waitingReviewTasks: number;
+  docsUnderReview: number;
+  openIssues: number;
+  overdueIssues: number;
+  issuesWaitingVerification: number;
+  expiringFiles: number;
+  expiredFiles: number;
+  lastActivity: string | null;
+  operationalStatus: WorkspaceOperationalStatus;
+  operationalStatusLabel: string;
+  operationalReasons: WorkspaceStatusReason[];
+}
+
 export interface DashboardOverview {
   overallAuditReadinessPercent: number;
   checklistReadinessPercent: number;
@@ -115,10 +152,30 @@ export interface DashboardOverview {
     unread: number;
     recent: NotificationItem[];
   };
-  /** Workspace IDs the user has access to — used for socket room joining */
+  /** Task file expiry counts (only populated for elevated/Super User roles) */
+  taskFileSummary?: { expiringSoon: number; expired: number };
+  /** Workspace socket room IDs */
   accessibleWorkspaceIds: string[];
-  /** Number of workspaces accessible to this user */
   myWorkspacesCount: number;
-  /** ISO timestamp of when this response was generated */
+  activeWorkspaceCount?: number;
+  /** Workspace status rows for business control center (elevated only) */
+  workspaceStatusRows?: WorkspaceStatusRow[];
   lastUpdated: string;
+}
+
+/** Expiring task file returned by GET /file-attachments/expiring */
+export interface ExpiringTaskFile {
+  id: string;
+  originalFileName: string;
+  displayName: string | null;
+  expiryDate: string;
+  issueDate: string | null;
+  reminderDays: number | null;
+  notes: string | null;
+  isSuperseded: boolean;
+  createdAt: string;
+  uploadedBy: { id: string; fullName: string };
+  entityId: string;
+  task?: { id: string; title: string; assigneeId: string | null; workspaceId: string; workspace: { id: string; name: string } };
+  daysUntilExpiry?: number;
 }

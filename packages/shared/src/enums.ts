@@ -130,6 +130,11 @@ export enum NotificationCategory {
   TASK_ASSIGNED = "TASK_ASSIGNED",
   TASK_DUE_REMINDER = "TASK_DUE_REMINDER",
   TASK_OVERDUE = "TASK_OVERDUE",
+  TASK_WAITING_REVIEW = "TASK_WAITING_REVIEW",
+  TASK_COMPLETED = "TASK_COMPLETED",
+  TASK_REJECTED = "TASK_REJECTED",
+  TASK_CANCELLED = "TASK_CANCELLED",
+  TASK_REOPENED = "TASK_REOPENED",
   EVIDENCE_SUBMITTED = "EVIDENCE_SUBMITTED",
   EVIDENCE_REJECTED = "EVIDENCE_REJECTED",
   DOCUMENT_REVIEW_PENDING = "DOCUMENT_REVIEW_PENDING",
@@ -139,6 +144,50 @@ export enum NotificationCategory {
   NCR_CAPA_OVERDUE = "NCR_CAPA_OVERDUE",
   GENERAL = "GENERAL",
 }
+
+// ─── Task Status Transitions ──────────────────────────────────────────────────
+// Single authoritative map shared by backend (service) and frontend (action UI).
+// MEMBER = normal assignee/workspace-member
+// ELEVATED = SUPER_ADMIN / IT_ADMIN / ISO_MANAGER / QHSE_USER / SUPER_USER
+// MANAGER = workspace OWNER or MANAGER role
+
+export const TASK_STATUS_TRANSITIONS: Record<'MEMBER' | 'ELEVATED' | 'MANAGER', Record<string, string[]>> = {
+  // Unit 62: Normal assigned Member submits work for review — no direct COMPLETED or CANCELLED.
+  // Workflow: TODO → IN_PROGRESS → WAITING_REVIEW → (reviewed by Manager/Elevated)
+  //           REJECTED → IN_PROGRESS (resume) → WAITING_REVIEW
+  MEMBER: {
+    TODO:           ['IN_PROGRESS'],           // Start Work only
+    IN_PROGRESS:    ['WAITING_REVIEW'],        // Mark Work Complete only
+    WAITING_REVIEW: [],                        // Read-only — awaiting reviewer decision
+    REJECTED:       ['IN_PROGRESS'],           // Resume Work only — no direct re-submit
+    COMPLETED:      [],                        // Read-only
+    CANCELLED:      [],                        // Read-only
+  },
+  MANAGER: {
+    TODO:           ['IN_PROGRESS', 'WAITING_REVIEW', 'COMPLETED', 'CANCELLED'],
+    IN_PROGRESS:    ['WAITING_REVIEW', 'COMPLETED', 'REJECTED', 'CANCELLED'],
+    WAITING_REVIEW: ['COMPLETED', 'REJECTED', 'CANCELLED'],
+    REJECTED:       ['IN_PROGRESS', 'WAITING_REVIEW', 'CANCELLED'],
+    COMPLETED:      ['TODO', 'IN_PROGRESS'],
+    CANCELLED:      ['TODO'],
+  },
+  ELEVATED: {
+    TODO:           ['IN_PROGRESS', 'WAITING_REVIEW', 'COMPLETED', 'REJECTED', 'CANCELLED'],
+    IN_PROGRESS:    ['WAITING_REVIEW', 'COMPLETED', 'REJECTED', 'CANCELLED'],
+    WAITING_REVIEW: ['COMPLETED', 'REJECTED', 'CANCELLED'],
+    REJECTED:       ['IN_PROGRESS', 'WAITING_REVIEW', 'CANCELLED'],
+    COMPLETED:      ['TODO', 'IN_PROGRESS'],
+    CANCELLED:      ['TODO'],
+  },
+};
+
+// Transitions that require a mandatory non-empty reason.
+// WAITING_REVIEW: assignee must provide a completion note when submitting work for review.
+// (Reviewers/Managers who manually move tasks also benefit from having a note.)
+export const TASK_STATUS_REASON_REQUIRED = new Set(['REJECTED', 'CANCELLED', 'WAITING_REVIEW']);
+
+// Transitions that are considered "reopen" (from a terminal state)
+export const TASK_STATUS_REOPEN_SOURCES = new Set(['COMPLETED', 'CANCELLED']);
 
 // ─── Document Category ────────────────────────────────────────────────────────
 

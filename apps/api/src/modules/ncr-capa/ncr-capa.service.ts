@@ -186,11 +186,12 @@ export class NcrCapaService {
     if (record.assignedTo && record.assignedTo.id !== actorId) {
       void this.notifications.create({
         recipientId: record.assignedTo.id,
-        category:    'TASK_ASSIGNED',
-        title:       'NCR/CAPA Assigned to You',
-        message:     `You have been assigned to NCR/CAPA: "${record.title}"`,
+        category:    'NCR_ASSIGNED',
+        title:       'Issue Assigned to You',
+        message:     `You have been assigned to issue: "${record.title}"`,
         entityType:  'NCR_CAPA',
         entityId:    record.id,
+        workspaceId: record.workspaceId ?? undefined,
       }).catch(() => {});
     }
 
@@ -327,11 +328,12 @@ export class NcrCapaService {
     if (record.raisedById !== actorId) {
       void this.notifications.create({
         recipientId: record.raisedById,
-        category:    'EVIDENCE_APPROVED',
-        title:       'NCR/CAPA Verified',
-        message:     `Your NCR/CAPA "${updated.title ?? ''}" has been verified.`,
+        category:    'NCR_VERIFIED',
+        title:       'Issue Verified',
+        message:     `Your issue "${updated.title ?? ''}" has been verified.`,
         entityType:  'NCR_CAPA',
         entityId:    id,
+        workspaceId: updated.workspaceId ?? undefined,
       }).catch(() => {});
     }
 
@@ -365,11 +367,12 @@ export class NcrCapaService {
     if (notifyId !== actorId) {
       void this.notifications.create({
         recipientId: notifyId,
-        category:    'EVIDENCE_REJECTED',
-        title:       'NCR/CAPA Verification Rejected',
-        message:     `NCR/CAPA "${updated.title ?? ''}" was rejected: ${dto.rejectionReason}`,
+        category:    'NCR_REJECTED',
+        title:       'Issue Rejected',
+        message:     `Issue "${updated.title ?? ''}" was rejected: ${dto.rejectionReason}`,
         entityType:  'NCR_CAPA',
         entityId:    id,
+        workspaceId: updated.workspaceId ?? undefined,
       }).catch(() => {});
     }
 

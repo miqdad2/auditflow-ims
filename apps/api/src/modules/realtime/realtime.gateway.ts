@@ -1,4 +1,4 @@
-import {
+﻿import {
   WebSocketGateway,
   WebSocketServer,
   OnGatewayConnection,
@@ -14,7 +14,10 @@ import { RealtimeService } from './realtime.service';
 import { PrismaService } from '../../common/prisma.service';
 
 @WebSocketGateway({
-  cors: { origin: '*', credentials: true },
+  cors: {
+    origin: process.env.CORS_ORIGIN ?? 'http://localhost:3000',
+    credentials: true,
+  },
   namespace: '/',
 })
 export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
@@ -56,7 +59,7 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   }
 
   handleDisconnect(client: Socket) {
-    // Cleanup is automatic — Socket.IO removes from rooms on disconnect
+    // Cleanup is automatic â€” Socket.IO removes from rooms on disconnect
     void client;
   }
 
@@ -110,7 +113,7 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnGa
 
     // ORGANIZATION: only elevated (above) and explicit members (above)
     // PRIVATE: only explicit members (above)
-    // STAFF / AUDITOR_VIEWER without membership: deny — do not join room
+    // STAFF / AUDITOR_VIEWER without membership: deny â€” do not join room
   }
 
   @SubscribeMessage('leave:workspace')
@@ -133,3 +136,4 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     }
   }
 }
+

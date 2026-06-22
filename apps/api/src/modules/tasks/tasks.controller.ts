@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards,
+  Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, ForbiddenException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/jwt-auth.guard';
 import { PermissionsGuard, extractUserRoles, extractUserPermissions } from '../../common/permissions.guard';
@@ -8,16 +8,25 @@ import { CurrentUser } from '../../common/current-user.decorator';
 import { TasksService } from './tasks.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
+import { ChangeStatusDto } from './dto/change-status.dto';
 import { CreateCommentDto } from './dto/create-comment.dto';
 import { UpdateCommentDto } from './dto/update-comment.dto';
+import { TASK_STATUS_TRANSITIONS } from '@auditflow/shared';
 
 @Controller('tasks')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class TasksController {
   constructor(private svc: TasksService) {}
 
+  /** Returns the authoritative transition map for all role tiers */
+  @Get('transitions')
+  @RequirePermissions('project.read')
+  getTransitions() {
+    return TASK_STATUS_TRANSITIONS;
+  }
+
   @Get()
-  @RequirePermissions('tasks.read')
+  @RequirePermissions('project.read')
   findMany(
     @CurrentUser() user: Record<string, unknown>,
     @Query('workspaceId') workspaceId?: string,
@@ -34,7 +43,7 @@ export class TasksController {
   }
 
   @Get(':id')
-  @RequirePermissions('tasks.read')
+  @RequirePermissions('project.read')
   findOne(@Param('id') id: string) {
     return this.svc.findOne(id);
   }
@@ -61,8 +70,19 @@ export class TasksController {
     return this.svc.update(id, dto, user);
   }
 
+  /** Controlled status change — validates transition map, role authority, concurrency, mandatory reasons */
+  @Patch(':id/status')
+  @RequirePermissions('project.read')
+  changeStatus(
+    @Param('id') id: string,
+    @Body() dto: ChangeStatusDto,
+    @CurrentUser() user: Record<string, unknown>,
+  ) {
+    return this.svc.changeStatus(id, dto, user);
+  }
+
   @Post(':id/comments')
-  @RequirePermissions('tasks.read')
+  @RequirePermissions('project.read')
   addComment(
     @Param('id') taskId: string,
     @Body() dto: CreateCommentDto,
@@ -72,13 +92,13 @@ export class TasksController {
   }
 
   @Get(':id/comments')
-  @RequirePermissions('tasks.read')
+  @RequirePermissions('project.read')
   getComments(@Param('id') taskId: string) {
     return this.svc.getComments(taskId);
   }
 
   @Get(':id/activity')
-  @RequirePermissions('tasks.read')
+  @RequirePermissions('project.read')
   getActivity(@Param('id') taskId: string) {
     return this.svc.getActivity(taskId);
   }
@@ -103,8 +123,36 @@ export class TasksController {
     return this.svc.deleteTask(id, user);
   }
 
+  // ── Recurrence reconciliation (elevated-only) ─────────────────────────────
+  // Preview: read-only report of completed recurring tasks missing a next child.
+  @Get('recurrence/reconciliation-preview')
+  @RequirePermissions('project.read')
+  getRecurrenceReconciliationPreview(@CurrentUser() user: Record<string, unknown>) {
+    const roles = extractUserRoles(user);
+    const ELEVATED = ['SUPER_ADMIN', 'IT_ADMIN', 'ISO_MANAGER', 'QHSE_USER', 'SUPER_USER'];
+    if (!roles.some((r) => ELEVATED.includes(r))) {
+      throw new ForbiddenException('Recurrence reconciliation is restricted to elevated roles');
+    }
+    return this.svc.getRecurrenceReconciliationPreview();
+  }
+
+  // Repair: idempotent creation of a single missing next occurrence.
+  @Post('recurrence/repair/:sourceId')
+  @RequirePermissions('project.read')
+  repairMissingOccurrence(
+    @Param('sourceId') sourceId: string,
+    @CurrentUser() user: Record<string, unknown>,
+  ) {
+    const roles = extractUserRoles(user);
+    const ELEVATED = ['SUPER_ADMIN', 'IT_ADMIN', 'SUPER_USER'];
+    if (!roles.some((r) => ELEVATED.includes(r))) {
+      throw new ForbiddenException('Recurrence repair requires Super Admin or Super User role');
+    }
+    return this.svc.repairMissingOccurrence(sourceId, user.id as string);
+  }
+
   @Patch(':id/comments/:commentId')
-  @RequirePermissions('tasks.read')
+  @RequirePermissions('project.read')
   updateComment(
     @Param('id') taskId: string,
     @Param('commentId') commentId: string,
@@ -115,12 +163,37 @@ export class TasksController {
   }
 
   @Delete(':id/comments/:commentId')
-  @RequirePermissions('tasks.read')
+  @RequirePermissions('project.read')
   deleteComment(
     @Param('id') taskId: string,
     @Param('commentId') commentId: string,
     @CurrentUser() user: Record<string, unknown>,
   ) {
     return this.svc.deleteComment(taskId, commentId, user);
+  }
+}
+
+// ── Task reorder endpoint lives outside the /tasks prefix ────────────────────
+// Route: PATCH /task-lists/:taskListId/tasks/reorder
+
+import { Controller as Ctrl2, Patch as Patch2, Param as Param2, Body as Body2, UseGuards as UseGuards2 } from '@nestjs/common';
+
+class ReorderTasksDto {
+  orderedIds: string[];
+}
+
+@Ctrl2('task-lists')
+@UseGuards2(JwtAuthGuard, PermissionsGuard)
+export class TaskReorderController {
+  constructor(private svc: TasksService) {}
+
+  @Patch2(':taskListId/tasks/reorder')
+  @RequirePermissions('project.read')
+  reorder(
+    @Param2('taskListId') taskListId: string,
+    @Body2() dto: ReorderTasksDto,
+    @CurrentUser() user: Record<string, unknown>,
+  ) {
+    return this.svc.reorderTasks(taskListId, dto.orderedIds, user);
   }
 }

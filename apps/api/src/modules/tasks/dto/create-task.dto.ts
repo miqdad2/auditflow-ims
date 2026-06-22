@@ -1,8 +1,11 @@
 import {
   IsString, IsNotEmpty, IsOptional, MaxLength,
-  IsIn, IsDateString,
+  IsIn, IsDateString, IsBoolean,
 } from 'class-validator';
 import { TaskStatus, Priority } from '@auditflow/shared';
+
+export const RECURRENCE_INTERVALS = ['NONE', 'MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL'] as const;
+export type RecurrenceInterval = typeof RECURRENCE_INTERVALS[number];
 
 export class CreateTaskDto {
   @IsString()
@@ -31,6 +34,10 @@ export class CreateTaskDto {
   @IsIn(Object.values(Priority))
   priority?: string;
 
+  @IsBoolean()
+  @IsOptional()
+  isReference?: boolean;
+
   @IsString()
   @IsOptional()
   assigneeId?: string;
@@ -38,4 +45,13 @@ export class CreateTaskDto {
   @IsDateString()
   @IsOptional()
   dueDate?: string;
+
+  @IsString()
+  @IsOptional()
+  @IsIn(RECURRENCE_INTERVALS)
+  recurrenceInterval?: string;
+
+  @IsDateString()
+  @IsOptional()
+  recurrenceEndDate?: string;
 }

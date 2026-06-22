@@ -7,9 +7,9 @@ const STATUS_STYLES: Record<string, { bg: string; color: string; label: string }
   // Task statuses
   TODO:           { bg: 'var(--bg-muted)',         color: 'var(--text-muted)',     label: 'To Do' },
   IN_PROGRESS:    { bg: 'var(--accent-soft)',       color: 'var(--accent-primary)', label: 'In Progress' },
-  WAITING_REVIEW: { bg: 'var(--state-warning-soft)',color: 'var(--state-warning)',  label: 'In Review' },
+  WAITING_REVIEW: { bg: 'var(--state-warning-soft)',color: 'var(--state-warning)',  label: 'Waiting Review' },
   COMPLETED:      { bg: 'var(--state-success-soft)',color: 'var(--state-success)',  label: 'Completed' },
-  REJECTED:       { bg: 'var(--state-error-soft)',  color: 'var(--state-error)',    label: 'Rejected' },
+  REJECTED:       { bg: 'var(--state-error-soft)',  color: 'var(--state-error)',    label: 'Returned for Correction' },
   CANCELLED:      { bg: 'var(--bg-muted)',          color: 'var(--text-disabled)',  label: 'Cancelled' },
   // Workspace statuses
   ACTIVE:         { bg: 'var(--state-success-soft)',color: 'var(--state-success)',  label: 'Active' },
@@ -33,6 +33,43 @@ export function StatusBadge({ status, size = 'sm' }: StatusBadgeProps) {
   return (
     <span
       className={`inline-flex items-center rounded-full font-medium ${padding}`}
+      style={{ backgroundColor: style.bg, color: style.color }}
+    >
+      {style.label}
+    </span>
+  );
+}
+
+export type WorkspaceOperationalStatus =
+  | 'INACTIVE'
+  | 'SETUP_REQUIRED'
+  | 'CRITICAL'
+  | 'NEEDS_ATTENTION'
+  | 'IN_PROGRESS'
+  | 'HEALTHY';
+
+const OP_STATUS_STYLES: Record<WorkspaceOperationalStatus, { bg: string; color: string; label: string }> = {
+  INACTIVE:         { bg: 'var(--bg-muted)',           color: 'var(--text-muted)',     label: 'Inactive' },
+  SETUP_REQUIRED:   { bg: 'var(--state-warning-soft)', color: 'var(--state-warning)',  label: 'Setup Required' },
+  CRITICAL:         { bg: 'var(--state-error-soft)',   color: 'var(--state-error)',    label: 'Critical' },
+  NEEDS_ATTENTION:  { bg: 'var(--state-warning-soft)', color: 'var(--state-warning)',  label: 'Needs Attention' },
+  IN_PROGRESS:      { bg: 'var(--accent-soft)',        color: 'var(--accent-primary)', label: 'In Progress' },
+  HEALTHY:          { bg: 'var(--state-success-soft)', color: 'var(--state-success)',  label: 'Healthy' },
+};
+
+export function WorkspaceOpStatusBadge({
+  status,
+  size = 'sm',
+}: {
+  status: WorkspaceOperationalStatus | string;
+  size?: 'sm' | 'xs';
+}) {
+  const style = OP_STATUS_STYLES[status as WorkspaceOperationalStatus]
+    ?? { bg: 'var(--bg-muted)', color: 'var(--text-muted)', label: status };
+  const padding = size === 'xs' ? 'px-1.5 py-0.5 text-[10px]' : 'px-2 py-0.5 text-xs';
+  return (
+    <span
+      className={`inline-flex items-center rounded-full font-semibold ${padding}`}
       style={{ backgroundColor: style.bg, color: style.color }}
     >
       {style.label}

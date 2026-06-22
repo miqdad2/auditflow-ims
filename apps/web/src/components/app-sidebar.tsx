@@ -16,6 +16,7 @@ import {
   Activity,
   Bug,
   Building2,
+  Zap,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 
@@ -27,6 +28,8 @@ const DEPT_ROLES = ['DEPARTMENT_MANAGER', 'DEPARTMENT_USER'];
 const ADMIN_ROLES = ['SUPER_ADMIN', 'IT_ADMIN'];
 // Business power-user: sees User Management + Departments, but NOT technical admin pages
 const BUSINESS_ADMIN_ROLES = ['SUPER_USER'];
+// Action Center: Super User and Super Admin daily control page
+const ACTION_CENTER_ROLES = ['SUPER_USER', 'SUPER_ADMIN'];
 
 const ALL_NAV = [
   { label: 'Dashboard',      href: '/dashboard',    icon: LayoutDashboard },
@@ -97,6 +100,7 @@ export function AppSidebar() {
   const isAdmin = roles.some((r) => ADMIN_ROLES.includes(r));
   const isSuperAdmin = roles.includes('SUPER_ADMIN');
   const isBusinessAdmin = roles.some((r) => BUSINESS_ADMIN_ROLES.includes(r));
+  const canAccessActionCenter = roles.some((r) => ACTION_CENTER_ROLES.includes(r));
   // User Management: SUPER_ADMIN, IT_ADMIN, SUPER_USER
   const canManageUsers = isAdmin || isBusinessAdmin;
   // Departments: SUPER_ADMIN and SUPER_USER only — IT_ADMIN manages system, not business master data
@@ -168,6 +172,18 @@ export function AppSidebar() {
             return <NavItem key={href} href={href} icon={icon} label={label} active={active} />;
           })}
 
+          {/* Action Center: SUPER_USER, SUPER_ADMIN */}
+          {canAccessActionCenter && (
+            <li>
+              <NavItem
+                href="/action-center"
+                icon={Zap}
+                label="Action Center"
+                active={pathname.startsWith('/action-center')}
+              />
+            </li>
+          )}
+
           {/* User Management: SUPER_ADMIN, IT_ADMIN, SUPER_USER */}
           {canManageUsers && (
             <li className="mt-2">
@@ -215,7 +231,7 @@ export function AppSidebar() {
                 <NavItem
                   href="/admin/system-errors"
                   icon={Bug}
-                  label="Error Logs"
+                  label="System Errors"
                   active={pathname === '/admin/system-errors'}
                 />
               </li>

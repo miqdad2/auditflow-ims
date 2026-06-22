@@ -11,6 +11,11 @@ import { UpdateWorkspaceMemberDto } from './dto/update-workspace-member.dto';
 import { SetHomePageDto } from './dto/set-home-page.dto';
 import { PinItemDto } from './dto/pin-item.dto';
 import { extractUserRoles } from '../../common/permissions.guard';
+import {
+  computeWorkspaceOperationalStatus,
+  endOfDayKuwait,
+  type WorkspaceStatusReason,
+} from './workspace-status.helper';
 
 const ELEVATED_ROLES = ['SUPER_ADMIN', 'IT_ADMIN', 'ISO_MANAGER', 'QHSE_USER', 'SUPER_USER'];
 
@@ -68,6 +73,74 @@ export class WorkspacesService {
       select: { roleInWorkspace: true },
     });
     return m?.roleInWorkspace ?? null;
+  }
+
+  /**
+   * Verify that a user is eligible to receive a task assignment in a workspace.
+   *
+   * Actor-role elevation (e.g. SUPER_USER) means the ACTOR may manage any task —
+   * it does NOT bypass the ASSIGNEE's own workspace-access requirements.
+   * These are two separate checks:
+   *   • Actor check  → handled by assertWorkspaceAccess / canCollaborateInWorkspace
+   *   • Assignee check → handled here, always enforced regardless of actor role
+   *
+   * Eligibility rules for the assignee:
+   *   1. User must exist and be active.
+   *   2. User must be an explicit WorkspaceMember with MEMBER | MANAGER | OWNER role.
+   *      VIEWER is read-only access and is NOT eligible for task assignment.
+   *   3. Narrow exception: if the assignee themselves holds SUPER_ADMIN or SUPER_USER
+   *      system-level access, they can be assigned without explicit workspace membership
+   *      because they have implicit business-wide visibility.
+   *
+   * The `actorRoles` parameter is kept for backward compatibility but is intentionally
+   * unused here — actor privileges must not influence assignee eligibility.
+   */
+  async assertCanBeAssigned(
+    assigneeId: string,
+    workspaceId: string,
+    _actorRoles: string[], // actor privilege does not bypass assignee eligibility
+  ): Promise<void> {
+    const [assignee, membership] = await Promise.all([
+      this.prisma.user.findUnique({
+        where: { id: assigneeId },
+        select: {
+          isActive: true,
+          userRoles: { include: { role: { select: { name: true } } } },
+        },
+      }),
+      this.prisma.workspaceMember.findUnique({
+        where: { workspaceId_userId: { workspaceId, userId: assigneeId } },
+        select: { roleInWorkspace: true },
+      }),
+    ]);
+
+    if (!assignee) throw new BadRequestException('Assignee user not found.');
+    if (!assignee.isActive) throw new BadRequestException('This user is inactive and cannot be assigned tasks.');
+
+    // Elevated-assignee exception: SUPER_ADMIN or SUPER_USER can be assigned without
+    // explicit workspace membership because they have implicit business-wide access.
+    const ELEVATED_ASSIGNEE_ROLES = ['SUPER_ADMIN', 'SUPER_USER'];
+    const assigneeSystemRoles = (assignee.userRoles as Array<{ role: { name: string } }>).map((ur) => ur.role.name);
+    if (assigneeSystemRoles.some((r) => ELEVATED_ASSIGNEE_ROLES.includes(r))) return;
+
+    // All other users: require explicit workspace membership with operational role.
+    if (!membership) {
+      throw new BadRequestException(
+        'This user must be added to the workspace as a Member, Manager, or Owner before the task can be assigned.',
+      );
+    }
+
+    if (membership.roleInWorkspace === 'VIEWER') {
+      throw new BadRequestException(
+        'This user has read-only workspace access and cannot be assigned operational tasks.',
+      );
+    }
+
+    if (!['MEMBER', 'MANAGER', 'OWNER'].includes(membership.roleInWorkspace)) {
+      throw new BadRequestException(
+        'Only workspace Members, Managers, and Owners can be assigned tasks.',
+      );
+    }
   }
 
   /**
@@ -327,7 +400,111 @@ export class WorkspacesService {
     actorDeptId: string | null,
   ) {
     await this.assertWorkspaceAccess(workspaceId, actorId, actorRoles, actorDeptId);
-    return this.getWorkspaceAuditLogs(workspaceId, 50);
+
+    // Tier D: elevated system roles see the full workspace audit history
+    if (actorRoles.some((r) => ELEVATED_ROLES.includes(r))) {
+      return this.getWorkspaceAuditLogs(workspaceId, 50);
+    }
+
+    // Tier C: workspace Manager/Owner see full workspace activity
+    const memberRole = await this.getWorkspaceMemberRole(actorId, workspaceId);
+    if (memberRole === 'MANAGER' || memberRole === 'OWNER') {
+      return this.getWorkspaceAuditLogs(workspaceId, 50);
+    }
+
+    // Tier A/B: VIEWER or MEMBER — see only personally relevant activity
+    return this.getMemberScopedActivity(workspaceId, actorId, 50);
+  }
+
+  /**
+   * Role-scoped activity for MEMBER and VIEWER roles (Tiers A/B).
+   *
+   * Returns audit events that are directly relevant to the current user:
+   * 1. Actions the user performed themselves (actorId = currentUser)
+   * 2. Events on tasks currently assigned to the current user
+   * 3. Workspace membership events that concern the current user
+   *
+   * Historical limitation: if a task was reassigned away, the user no longer sees
+   * historical events on that task because task assignment is a live state lookup.
+   * Future events record richer metadata so this limitation shrinks over time.
+   */
+  private async getMemberScopedActivity(workspaceId: string, actorId: string, take: number) {
+    // Step 1: collect task IDs currently assigned to this user in the workspace
+    const [assignedTasks, workspace] = await Promise.all([
+      this.prisma.task.findMany({
+        where: { workspaceId, assigneeId: actorId },
+        select: { id: true, title: true },
+      }),
+      this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true, name: true } }),
+    ]);
+
+    const assignedTaskIds = assignedTasks.map((t) => t.id);
+    const taskTitleMap = new Map(assignedTasks.map((t) => [t.id, t.title]));
+
+    // Step 2: OR conditions for relevant events
+    // Build task list for in-operator (Prisma requires at least one item; use sentinel if empty)
+    const taskIdList = assignedTaskIds.length > 0 ? assignedTaskIds : ['__NO_ASSIGNED_TASKS__'];
+
+    const orConditions: Record<string, unknown>[] = [
+      // Own actions on any workspace entity
+      { actorId, entityType: 'PROJECT',        entityId: workspaceId },
+      { actorId, entityType: 'DOCUMENT' },
+      { actorId, entityType: 'NCR_CAPA' },
+      { actorId, entityType: 'FILE_ATTACHMENT' },
+      // Own task actions (actor is current user)
+      { actorId, entityType: 'TASK' },
+      // Any action on tasks assigned to current user (any actor)
+      { entityType: 'TASK', entityId: { in: taskIdList } },
+    ];
+
+    // Fetch more than `take` to allow post-filtering of PROJECT events
+    const rawLogs = await this.prisma.auditLog.findMany({
+      where: { OR: orConditions },
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(take * 3, 200),
+      include: { actor: { select: { id: true, fullName: true } } },
+    });
+
+    // Step 3: post-filter — restrict PROJECT events to only those relevant to current user
+    const filtered = rawLogs.filter((log) => {
+      if (log.entityType !== 'PROJECT') return true;
+      if (log.actorId === actorId) return true; // their own workspace actions (department assign, etc.)
+
+      // Membership events: only show if they concern the current user
+      const nv = log.newValue as Record<string, unknown> | null;
+      const pv = log.previousValue as Record<string, unknown> | null;
+      if (log.action === 'MEMBER_ADDED' || log.action === 'MEMBER_UPDATED') {
+        return nv?.userId === actorId;
+      }
+      if (log.action === 'MEMBER_REMOVED') {
+        return pv?.userId === actorId;
+      }
+
+      // Hide all other PROJECT-level workspace admin events (workspace updated, archived, etc.)
+      return false;
+    });
+
+    // Step 4: build title map for entity lookup
+    const titleMap = new Map<string, string>();
+    taskTitleMap.forEach((title, id) => titleMap.set(id, title));
+    if (workspace) titleMap.set(workspace.id, workspace.name);
+
+    // Resolve titles for documents/NCRs referenced in filtered events
+    const docIds = [...new Set(filtered.filter((l) => l.entityType === 'DOCUMENT' && l.entityId).map((l) => l.entityId as string))];
+    const ncrIds = [...new Set(filtered.filter((l) => l.entityType === 'NCR_CAPA' && l.entityId).map((l) => l.entityId as string))];
+    if (docIds.length > 0) {
+      const docs = await this.prisma.document.findMany({ where: { id: { in: docIds } }, select: { id: true, title: true } });
+      docs.forEach((d) => titleMap.set(d.id, d.title));
+    }
+    if (ncrIds.length > 0) {
+      const ncrs = await this.prisma.ncrCapa.findMany({ where: { id: { in: ncrIds } }, select: { id: true, title: true } });
+      ncrs.forEach((n) => titleMap.set(n.id, n.title));
+    }
+
+    return filtered.slice(0, take).map((log) => ({
+      ...log,
+      entityTitle: log.entityId ? (titleMap.get(log.entityId) ?? null) : null,
+    }));
   }
 
   // ─── Home Page ──────────────────────────────────────────────────────────────
@@ -575,11 +752,19 @@ export class WorkspacesService {
     return summary;
   }
 
-  private async withWorkspaceSummaries<T extends { id: string }>(workspaces: T[]) {
+  private async withWorkspaceSummaries<T extends {
+    id: string;
+    status: string;
+    departmentId: string | null;
+    _count: { members: number };
+  }>(workspaces: T[]) {
     const workspaceIds = workspaces.map((ws) => ws.id);
     if (workspaceIds.length === 0) return [];
 
     const now = new Date();
+    const eod = endOfDayKuwait(now);
+
+    // ── Round 1: all workspace-level batch queries in parallel ────────────────
     const [
       completedTasks,
       openTasks,
@@ -589,7 +774,14 @@ export class WorkspacesService {
       openNcrCapas,
       overdueNcrCapas,
       checklistItems,
+      // For operational status:
+      taskDetailRows,
+      ncrDetailRows,
+      deptRows,
+      // Operational member count: MEMBER | MANAGER | OWNER (excludes VIEWER)
+      operationalMemberRows,
     ] = await Promise.all([
+      // ── Existing summary queries ───────────────────────────────────────────
       this.prisma.task.groupBy({
         by: ['workspaceId'],
         where: { workspaceId: { in: workspaceIds }, status: 'COMPLETED' },
@@ -639,7 +831,64 @@ export class WorkspacesService {
         where: { checklist: { workspaceId: { in: workspaceIds } } },
         select: { status: true, checklist: { select: { workspaceId: true } } },
       }),
+      // ── Task detail rows (for status engine) ──────────────────────────────
+      this.prisma.task.findMany({
+        where: { workspaceId: { in: workspaceIds }, parentTaskId: null },
+        select: {
+          id: true,
+          workspaceId: true,
+          status: true,
+          priority: true,
+          isReference: true,
+          assigneeId: true,
+          dueDate: true,
+        },
+      }),
+      // ── NCR detail rows (for status engine) ───────────────────────────────
+      this.prisma.ncrCapa.findMany({
+        where: {
+          workspaceId: { in: workspaceIds },
+          status: { notIn: ['VERIFIED', 'CLOSED'] },
+        },
+        select: { workspaceId: true, status: true, dueDate: true },
+      }),
+      // ── Department active status ───────────────────────────────────────────
+      (() => {
+        const deptIds = [...new Set(workspaces.map((ws) => ws.departmentId).filter(Boolean))] as string[];
+        return deptIds.length > 0
+          ? this.prisma.department.findMany({
+              where: { id: { in: deptIds } },
+              select: { id: true, isActive: true },
+            })
+          : Promise.resolve([] as Array<{ id: string; isActive: boolean }>);
+      })(),
+      // ── Operational member count: MEMBER | MANAGER | OWNER (excludes VIEWER)
+      this.prisma.workspaceMember.groupBy({
+        by: ['workspaceId'],
+        where: {
+          workspaceId: { in: workspaceIds },
+          roleInWorkspace: { not: 'VIEWER' },
+          user: { isActive: true },
+        },
+        _count: { id: true },
+      }),
     ]);
+
+    // ── Round 2: file attachments (needs task IDs from round 1) ───────────────
+    const allTaskIds = taskDetailRows.map((t) => t.id);
+    const fileAttachmentRows = allTaskIds.length > 0
+      ? await this.prisma.fileAttachment.findMany({
+          where: {
+            entityType: 'TASK',
+            entityId: { in: allTaskIds },
+            isSuperseded: false,
+            expiryDate: { not: null },
+          },
+          select: { entityId: true, expiryDate: true, reminderDays: true },
+        })
+      : [];
+
+    // ── Build lookup maps ─────────────────────────────────────────────────────
 
     const countMap = (rows: Array<{ workspaceId: string | null; _count: { id: number } }>) => {
       const map = new Map<string, number>();
@@ -649,50 +898,136 @@ export class WorkspacesService {
       return map;
     };
 
-    const completedTaskMap = countMap(completedTasks);
-    const openTaskMap = countMap(openTasks);
-    const overdueTaskMap = countMap(overdueTasks);
-    const approvedDocumentMap = countMap(approvedDocuments);
+    const completedTaskMap        = countMap(completedTasks);
+    const openTaskMap             = countMap(openTasks);
+    const overdueTaskMap          = countMap(overdueTasks);
+    const approvedDocumentMap     = countMap(approvedDocuments);
     const documentsUnderReviewMap = countMap(documentsUnderReview);
-    const openNcrCapaMap = countMap(openNcrCapas);
-    const overdueNcrCapaMap = countMap(overdueNcrCapas);
-    const checklistMap = new Map<string, {
-      total: number;
-      approved: number;
-      submitted: number;
-      rejected: number;
-      missing: number;
-    }>();
+    const openNcrCapaMap          = countMap(openNcrCapas);
+    const overdueNcrCapaMap       = countMap(overdueNcrCapas);
+    const operationalMemberMap    = countMap(operationalMemberRows);
 
+    // Checklist map
+    const checklistMap = new Map<string, {
+      total: number; approved: number; submitted: number; rejected: number; missing: number;
+    }>();
     for (const item of checklistItems) {
       const workspaceId = item.checklist.workspaceId;
       if (!workspaceId) continue;
-      const summary = checklistMap.get(workspaceId) ?? {
-        total: 0,
-        approved: 0,
-        submitted: 0,
-        rejected: 0,
-        missing: 0,
-      };
-      summary.total += 1;
-      if (item.status === 'APPROVED') summary.approved += 1;
-      if (item.status === 'SUBMITTED') summary.submitted += 1;
-      if (item.status === 'REJECTED') summary.rejected += 1;
-      if (item.status === 'MISSING') summary.missing += 1;
-      checklistMap.set(workspaceId, summary);
+      const s = checklistMap.get(workspaceId) ?? { total: 0, approved: 0, submitted: 0, rejected: 0, missing: 0 };
+      s.total += 1;
+      if (item.status === 'APPROVED')  s.approved += 1;
+      if (item.status === 'SUBMITTED') s.submitted += 1;
+      if (item.status === 'REJECTED')  s.rejected += 1;
+      if (item.status === 'MISSING')   s.missing += 1;
+      checklistMap.set(workspaceId, s);
     }
 
+    // Task detail map (workspaceId → tasks)
+    type TaskRow = typeof taskDetailRows[number];
+    const taskByWs = new Map<string, TaskRow[]>();
+    for (const t of taskDetailRows) {
+      const arr = taskByWs.get(t.workspaceId) ?? [];
+      arr.push(t);
+      taskByWs.set(t.workspaceId, arr);
+    }
+
+    // File attachment map (taskId → workspace, then group by workspace)
+    type AttRow = typeof fileAttachmentRows[number];
+    const taskIdToWs = new Map<string, string>();
+    for (const t of taskDetailRows) taskIdToWs.set(t.id, t.workspaceId);
+    const filesByWs = new Map<string, AttRow[]>();
+    for (const att of fileAttachmentRows) {
+      const wsId = taskIdToWs.get(att.entityId);
+      if (!wsId) continue;
+      const arr = filesByWs.get(wsId) ?? [];
+      arr.push(att);
+      filesByWs.set(wsId, arr);
+    }
+
+    // NCR detail map (workspaceId → issues)
+    type NcrRow = typeof ncrDetailRows[number];
+    const ncrByWs = new Map<string, NcrRow[]>();
+    for (const n of ncrDetailRows) {
+      if (!n.workspaceId) continue;
+      const arr = ncrByWs.get(n.workspaceId) ?? [];
+      arr.push(n);
+      ncrByWs.set(n.workspaceId, arr);
+    }
+
+    // Department active map
+    const deptActiveMap = new Map<string, boolean>();
+    for (const d of deptRows) deptActiveMap.set(d.id, d.isActive);
+
+    // ── Per-workspace metrics and status computation ───────────────────────────
+
     return workspaces.map((workspace) => {
-      const checklist = checklistMap.get(workspace.id) ?? {
-        total: 0,
-        approved: 0,
-        submitted: 0,
-        rejected: 0,
-        missing: 0,
-      };
+      const checklist = checklistMap.get(workspace.id) ?? { total: 0, approved: 0, submitted: 0, rejected: 0, missing: 0 };
       const readinessPercent = checklist.total > 0
-        ? Math.round((checklist.approved / checklist.total) * 100)
-        : 0;
+        ? Math.round((checklist.approved / checklist.total) * 100) : 0;
+
+      // Task metrics
+      const wsTasks = taskByWs.get(workspace.id) ?? [];
+      const nonRefTasks = wsTasks.filter((t) => !t.isReference);
+      const activeTasks = nonRefTasks.filter((t) => !['COMPLETED', 'CANCELLED'].includes(t.status));
+
+      const inProgressTasks = activeTasks.filter((t) => t.status === 'IN_PROGRESS').length;
+      const unassignedTasks = activeTasks.filter((t) => !t.assigneeId).length;
+      const waitingReviewTasks = activeTasks.filter((t) => t.status === 'WAITING_REVIEW').length;
+      const returnedTasks = activeTasks.filter((t) => t.status === 'REJECTED').length;
+      const overdueCriticalHighTasks = nonRefTasks.filter((t) =>
+        !['COMPLETED', 'CANCELLED'].includes(t.status) &&
+        t.dueDate !== null && new Date(t.dueDate) < eod &&
+        ['CRITICAL', 'HIGH'].includes(t.priority),
+      ).length;
+      const overdueMediumLowTasks = nonRefTasks.filter((t) =>
+        !['COMPLETED', 'CANCELLED'].includes(t.status) &&
+        t.dueDate !== null && new Date(t.dueDate) < eod &&
+        ['LOW', 'MEDIUM'].includes(t.priority),
+      ).length;
+
+      // File expiry metrics (using per-file reminderDays, defaulting to 14)
+      const wsFiles = filesByWs.get(workspace.id) ?? [];
+      const expiredFiles = wsFiles.filter((f) => f.expiryDate !== null && new Date(f.expiryDate) < eod).length;
+      const expiringFiles = wsFiles.filter((f) => {
+        if (!f.expiryDate) return false;
+        const expiry = new Date(f.expiryDate);
+        if (expiry < eod) return false;
+        const reminderMs = (f.reminderDays ?? 14) * 24 * 60 * 60 * 1000;
+        return expiry.getTime() - eod.getTime() <= reminderMs;
+      }).length;
+
+      // NCR metrics
+      const wsNcrs = ncrByWs.get(workspace.id) ?? [];
+      const overdueIssues = wsNcrs.filter((n) =>
+        n.status === 'OVERDUE' || (n.dueDate !== null && new Date(n.dueDate) < eod),
+      ).length;
+      const openIssues = wsNcrs.length; // pre-filtered to non-terminal
+      const issuesWaitingVerification = wsNcrs.filter((n) => n.status === 'SUBMITTED').length;
+
+      // Operational members: MEMBER | MANAGER | OWNER with active user (excludes VIEWER)
+      const operationalMembers = operationalMemberMap.get(workspace.id) ?? 0;
+
+      // Compute operational status
+      const opResult = computeWorkspaceOperationalStatus({
+        lifecycleStatus:            workspace.status,
+        hasDepartment:              !!workspace.departmentId,
+        departmentIsActive:         workspace.departmentId ? (deptActiveMap.get(workspace.departmentId) ?? true) : false,
+        operationalMembers,
+        openTasks:                  activeTasks.length,
+        inProgressTasks,
+        unassignedTasks,
+        overdueCriticalHighTasks,
+        overdueMediumLowTasks,
+        waitingReviewTasks,
+        returnedTasks,
+        documentsUnderReview:       documentsUnderReviewMap.get(workspace.id) ?? 0,
+        overdueIssues,
+        openIssues,
+        issuesWaitingVerification,
+        expiredFiles,
+        expiringFiles,
+      });
 
       return {
         ...workspace,
@@ -713,6 +1048,10 @@ export class WorkspacesService {
             overdue: overdueNcrCapaMap.get(workspace.id) ?? 0,
           },
         },
+        operationalStatus:      opResult.status,
+        operationalStatusLabel: opResult.label,
+        operationalReasons:     opResult.reasons as WorkspaceStatusReason[],
+        metrics:                opResult.metrics,
       };
     });
   }
@@ -762,6 +1101,71 @@ export class WorkspacesService {
         },
       },
     });
+  }
+
+  /**
+   * Returns users eligible for task assignment in a workspace.
+   * Uses the same eligibility rules as assertCanBeAssigned():
+   *   1. Active MEMBER | MANAGER | OWNER workspace members.
+   *   2. Active SUPER_ADMIN | SUPER_USER users (elevated-assignee exception),
+   *      even if they are not explicit workspace members.
+   *
+   * This endpoint mirrors assertCanBeAssigned() so the dropdown and backend
+   * validation can never drift apart.
+   */
+  async getEligibleAssignees(workspaceId: string) {
+    await this.ensureWorkspaceExists(workspaceId);
+
+    // Group 1: operational workspace members (MEMBER | MANAGER | OWNER, active users)
+    const memberRows = await this.prisma.workspaceMember.findMany({
+      where: {
+        workspaceId,
+        roleInWorkspace: { not: 'VIEWER' },
+        user: { isActive: true },
+      },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        roleInWorkspace: true,
+        user: {
+          select: {
+            id: true,
+            fullName: true,
+            email: true,
+            department: { select: { id: true, name: true } },
+          },
+        },
+      },
+    });
+
+    const result = memberRows.map((m) => ({
+      id: m.user.id,
+      fullName: m.user.fullName,
+      email: m.user.email,
+      department: m.user.department,
+      roleInWorkspace: m.roleInWorkspace,
+    }));
+
+    // Group 2: elevated-assignee exception — active SUPER_ADMIN/SUPER_USER not already listed
+    const memberIds = new Set(result.map((r) => r.id));
+    const elevatedRows = await this.prisma.user.findMany({
+      where: {
+        isActive: true,
+        id: { notIn: [...memberIds] },
+        userRoles: { some: { role: { name: { in: ['SUPER_ADMIN', 'SUPER_USER'] } } } },
+      },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        department: { select: { id: true, name: true } },
+      },
+      orderBy: { fullName: 'asc' },
+    });
+    for (const u of elevatedRows) {
+      result.push({ ...u, roleInWorkspace: 'ELEVATED' });
+    }
+
+    return result;
   }
 
   async addMember(
@@ -837,10 +1241,46 @@ export class WorkspacesService {
     return updated;
   }
 
+  /** Returns the active-task impact of removing a workspace member (read-only). */
+  async getMemberRemovalImpact(workspaceId: string, memberId: string) {
+    const member = await this.prisma.workspaceMember.findFirst({
+      where: { id: memberId, workspaceId },
+      select: { userId: true, user: { select: { fullName: true } } },
+    });
+    if (!member) throw new NotFoundException('Workspace member not found');
+
+    const ACTIVE_STATUSES = ['TODO', 'IN_PROGRESS', 'WAITING_REVIEW', 'REJECTED'];
+    const activeTasks = await this.prisma.task.findMany({
+      where: {
+        workspaceId,
+        assigneeId: member.userId,
+        status: { in: ACTIVE_STATUSES },
+        isReference: false,
+      },
+      select: { id: true, title: true, status: true },
+      take: 20,
+    });
+
+    return {
+      memberId,
+      userId: member.userId,
+      userFullName: member.user.fullName,
+      activeTaskCount: activeTasks.length,
+      activeTasks,
+    };
+  }
+
+  /**
+   * Remove a workspace member.
+   * If the member has active assigned tasks, `taskHandling` is required.
+   * Supported values:
+   *   'leave-unassigned'  — remove member and unassign their active tasks
+   */
   async removeMember(
     workspaceId: string,
     memberId: string,
     actor: Record<string, unknown>,
+    taskHandling?: 'leave-unassigned',
   ) {
     const ws = await this.ensureWorkspaceExists(workspaceId);
     await this.assertCanManageMembers(ws, actor);
@@ -850,7 +1290,29 @@ export class WorkspacesService {
     });
     if (!member) throw new NotFoundException('Workspace member not found');
 
-    await this.prisma.workspaceMember.delete({ where: { id: memberId } });
+    const ACTIVE_STATUSES = ['TODO', 'IN_PROGRESS', 'WAITING_REVIEW', 'REJECTED'];
+    const activeTaskCount = await this.prisma.task.count({
+      where: { workspaceId, assigneeId: member.userId, status: { in: ACTIVE_STATUSES }, isReference: false },
+    });
+
+    if (activeTaskCount > 0 && !taskHandling) {
+      throw new BadRequestException(
+        `This member has ${activeTaskCount} active assigned task(s). ` +
+        `Provide taskHandling=leave-unassigned to proceed, or reassign tasks first.`,
+      );
+    }
+
+    if (taskHandling === 'leave-unassigned' && activeTaskCount > 0) {
+      await this.prisma.$transaction([
+        this.prisma.task.updateMany({
+          where: { workspaceId, assigneeId: member.userId, status: { in: ACTIVE_STATUSES } },
+          data: { assigneeId: null },
+        }),
+        this.prisma.workspaceMember.delete({ where: { id: memberId } }),
+      ]);
+    } else {
+      await this.prisma.workspaceMember.delete({ where: { id: memberId } });
+    }
 
     void this.auditLog.log({
       actorId: actor.id as string,
@@ -858,6 +1320,10 @@ export class WorkspacesService {
       entityType: 'PROJECT',
       entityId: workspaceId,
       previousValue: { userId: member.userId },
+      newValue: {
+        taskHandling: taskHandling ?? 'none',
+        activeTasksAffected: taskHandling === 'leave-unassigned' ? activeTaskCount : 0,
+      },
     });
 
     this.realtime.emitToWorkspace(workspaceId, 'workspace.member.removed', {
@@ -865,7 +1331,97 @@ export class WorkspacesService {
     });
     this.realtime.emitToUser(member.userId, 'workspace.access.removed', { workspaceId });
 
-    return { success: true };
+    return { success: true, activeTasksUnassigned: taskHandling === 'leave-unassigned' ? activeTaskCount : 0 };
+  }
+
+  /**
+   * Read-only data-integrity audit for a workspace.
+   * Returns actionable findings without modifying any data.
+   * Part 25: Unit 59.2
+   */
+  async getIntegrity(workspaceId: string, actorRoles: string[]) {
+    const ADMIN_ROLES = ['SUPER_ADMIN', 'IT_ADMIN', 'SUPER_USER'];
+    if (!actorRoles.some((r) => ADMIN_ROLES.includes(r))) {
+      throw new ForbiddenException('Data integrity audit requires SUPER_ADMIN, IT_ADMIN, or SUPER_USER role');
+    }
+
+    const ws = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { id: true, name: true, departmentId: true, status: true },
+    });
+    if (!ws) throw new NotFoundException('Workspace not found');
+
+    const findings: { severity: 'ERROR' | 'WARNING'; code: string; message: string; detail?: string }[] = [];
+
+    // 1. Workspace department not assigned
+    if (!ws.departmentId) {
+      findings.push({ severity: 'WARNING', code: 'WS_NO_DEPARTMENT', message: 'Workspace has no department assigned.', detail: `Workspace: ${ws.name}` });
+    }
+
+    // 2. Tasks assigned to inactive users
+    const tasksWithInactiveAssignee = await this.prisma.task.findMany({
+      where: { workspaceId, assigneeId: { not: null }, assignee: { isActive: false } },
+      select: { id: true, title: true, assignee: { select: { id: true, fullName: true } } },
+    });
+    for (const t of tasksWithInactiveAssignee) {
+      findings.push({ severity: 'ERROR', code: 'TASK_INACTIVE_ASSIGNEE', message: `Task assigned to inactive user.`, detail: `Task: "${t.title}" — Assignee: ${t.assignee?.fullName ?? '(unknown)'}` });
+    }
+
+    // 3. Tasks assigned to users who are not workspace members (and not elevated)
+    const tasksWithAssignee = await this.prisma.task.findMany({
+      where: { workspaceId, assigneeId: { not: null } },
+      select: { id: true, title: true, assigneeId: true, assignee: { select: { id: true, fullName: true } } },
+    });
+    const memberUserIds = new Set(
+      (await this.prisma.workspaceMember.findMany({ where: { workspaceId }, select: { userId: true } })).map((m) => m.userId),
+    );
+    for (const t of tasksWithAssignee) {
+      if (t.assigneeId && !memberUserIds.has(t.assigneeId)) {
+        findings.push({ severity: 'WARNING', code: 'TASK_ASSIGNEE_NOT_MEMBER', message: `Task assigned to user who is not a workspace member.`, detail: `Task: "${t.title}" — Assignee: ${t.assignee?.fullName ?? t.assigneeId}` });
+      }
+    }
+
+    // 4. Inactive workspace members with active assigned tasks
+    const inactiveMembers = await this.prisma.workspaceMember.findMany({
+      where: { workspaceId, user: { isActive: false } },
+      select: { userId: true, user: { select: { fullName: true } } },
+    });
+    for (const m of inactiveMembers) {
+      const activeTaskCount = await this.prisma.task.count({
+        where: { workspaceId, assigneeId: m.userId, status: { notIn: ['COMPLETED', 'CANCELLED'] } },
+      });
+      if (activeTaskCount > 0) {
+        findings.push({ severity: 'WARNING', code: 'INACTIVE_MEMBER_ACTIVE_TASKS', message: `Inactive workspace member has active assigned tasks.`, detail: `User: ${m.user.fullName} — ${activeTaskCount} active task(s)` });
+      }
+    }
+
+    // 5. Duplicate workspace member records (should not exist due to @@unique constraint, but verify)
+    const memberCounts = await this.prisma.workspaceMember.groupBy({
+      by: ['workspaceId', 'userId'],
+      where: { workspaceId },
+      _count: { id: true },
+      having: { id: { _count: { gt: 1 } } },
+    });
+    if (memberCounts.length > 0) {
+      findings.push({ severity: 'ERROR', code: 'DUPLICATE_MEMBER', message: `Duplicate workspace member records detected.`, detail: `${memberCounts.length} duplicate(s)` });
+    }
+
+    // 6. Workspace member records referencing non-existent users
+    const orphanedMembers = await this.prisma.workspaceMember.findMany({
+      where: { workspaceId, user: { id: undefined } },
+      select: { id: true, userId: true },
+    });
+    if (orphanedMembers.length > 0) {
+      findings.push({ severity: 'ERROR', code: 'ORPHANED_MEMBER', message: `Workspace member references a user that does not exist.`, detail: `Member IDs: ${orphanedMembers.map((m) => m.id).join(', ')}` });
+    }
+
+    return {
+      workspaceId: ws.id,
+      workspaceName: ws.name,
+      auditedAt: new Date().toISOString(),
+      findingCount: findings.length,
+      findings,
+    };
   }
 
   private async ensureWorkspaceExists(workspaceId: string) {

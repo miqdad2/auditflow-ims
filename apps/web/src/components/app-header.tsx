@@ -5,19 +5,22 @@ import { Bell, LogOut, ChevronDown, WifiOff, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { apiGet } from '@/lib/api';
 import { useSocket } from '@/lib/socket-provider';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 interface AppHeaderProps {
   title?: string;
 }
 
 export function AppHeader({ title }: AppHeaderProps) {
-  const router = useRouter();
+  const router   = useRouter();
   const pathname = usePathname();
   const { user, token, logout } = useAuth();
   const { socket, connected, reconnecting, isConnecting } = useSocket();
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuOpen, setMenuOpen]     = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  // Dedup: track notification IDs already counted in the badge this session
+  const seenBadgeIds = useRef<Set<string>>(new Set());
+  const prevConnected = useRef(false);
 
   const currentPageTitle = title ?? getHeaderTitle(pathname);
 
@@ -35,10 +38,30 @@ export function AppHeader({ title }: AppHeaderProps) {
     return () => clearInterval(id);
   }, [fetchUnread]);
 
-  // Live badge update via socket
+  // Refetch unread count from backend on socket reconnect (Part 4 + Part 13)
+  // This reconciles any notifications that arrived while disconnected.
+  useEffect(() => {
+    if (connected && !prevConnected.current) {
+      void fetchUnread();
+    }
+    prevConnected.current = connected;
+  }, [connected, fetchUnread]);
+
+  // Live badge increment — deduplicated by notification ID (Part 12)
   useEffect(() => {
     if (!socket) return;
-    const handler = () => setUnreadCount((c) => c + 1);
+    const handler = (data: unknown) => {
+      const notif = data as { id?: string };
+      if (!notif?.id) {
+        setUnreadCount((c) => c + 1);
+        return;
+      }
+      if (seenBadgeIds.current.has(notif.id)) return;
+      seenBadgeIds.current.add(notif.id);
+      // Auto-expire entry after 60s to prevent unbounded memory growth
+      setTimeout(() => seenBadgeIds.current.delete(notif.id!), 60_000);
+      setUnreadCount((c) => c + 1);
+    };
     socket.on('notification.created', handler);
     return () => { socket.off('notification.created', handler); };
   }, [socket]);
@@ -162,6 +185,7 @@ function getHeaderTitle(pathname: string): string {
   if (pathname.startsWith('/ncr-capa')) return 'NCR / CAPA';
   if (pathname.startsWith('/notifications')) return 'Notifications';
   if (pathname.startsWith('/reports')) return 'Reports';
+  if (pathname.startsWith('/departments')) return 'Departments';
   if (pathname.startsWith('/users')) return 'User Management';
   if (pathname.startsWith('/admin')) return 'Admin Settings';
   return 'Dashboard';

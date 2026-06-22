@@ -141,24 +141,44 @@ export default function NcrCapaPage() {
         </div>
       </div>
 
-      {/* Stats bar */}
+      {/* Stats bar — clickable filter cards */}
       <div className="grid grid-cols-4 gap-4 px-6 py-4 bg-gray-50 border-b border-gray-200">
-        <div className="bg-white rounded border border-gray-200 px-4 py-3">
+        <button
+          type="button"
+          onClick={() => setStatusTab('OPEN')}
+          className="bg-white rounded border px-4 py-3 text-left transition-colors hover:border-red-300"
+          style={{ borderColor: statusTab === 'OPEN' ? '#dc2626' : '#e5e7eb' }}
+        >
           <p className="text-xs text-gray-500">Open</p>
           <p className="text-2xl font-semibold text-red-600">{openCount}</p>
-        </div>
-        <div className="bg-white rounded border border-gray-200 px-4 py-3">
+        </button>
+        <button
+          type="button"
+          onClick={() => setStatusTab('OVERDUE')}
+          className="bg-white rounded border px-4 py-3 text-left transition-colors hover:border-orange-300"
+          style={{ borderColor: statusTab === 'OVERDUE' ? '#d97706' : '#e5e7eb' }}
+        >
           <p className="text-xs text-gray-500">Overdue</p>
           <p className="text-2xl font-semibold text-orange-600">{overdueCount}</p>
-        </div>
-        <div className="bg-white rounded border border-gray-200 px-4 py-3">
+        </button>
+        <button
+          type="button"
+          onClick={() => setStatusTab('VERIFIED')}
+          className="bg-white rounded border px-4 py-3 text-left transition-colors hover:border-green-300"
+          style={{ borderColor: statusTab === 'VERIFIED' ? '#16a34a' : '#e5e7eb' }}
+        >
           <p className="text-xs text-gray-500">Verified / Closed</p>
           <p className="text-2xl font-semibold text-green-600">{verifiedCount}</p>
-        </div>
-        <div className="bg-white rounded border border-gray-200 px-4 py-3">
+        </button>
+        <button
+          type="button"
+          onClick={() => setStatusTab('REJECTED')}
+          className="bg-white rounded border px-4 py-3 text-left transition-colors hover:border-gray-300"
+          style={{ borderColor: statusTab === 'REJECTED' ? '#6b7280' : '#e5e7eb' }}
+        >
           <p className="text-xs text-gray-500">Rejected</p>
           <p className="text-2xl font-semibold text-gray-600">{rejectedCount}</p>
-        </div>
+        </button>
       </div>
 
       {/* Filters */}

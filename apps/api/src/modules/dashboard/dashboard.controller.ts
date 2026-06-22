@@ -16,8 +16,23 @@ export class DashboardController {
   @Get('overview')
   @RequirePermissions('project.read')
   getOverview(@CurrentUser() user: Record<string, unknown>) {
-    const roles    = extractUserRoles(user);
-    const deptId   = (user.departmentId as string | null) ?? null;
+    const roles  = extractUserRoles(user);
+    const deptId = (user.departmentId as string | null) ?? null;
     return this.svc.getOverview(user.id as string, roles, deptId);
+  }
+
+  /**
+   * Personal assigned-task scope for the current user.
+   * Requires project.read (same as dashboard overview) to ensure normal users
+   * can access it regardless of whether tasks.read is in the database for their role.
+   *
+   * Returns: { summary: { open, inProgress, waitingReview, returned, overdue, completed, total }, tasks[] }
+   */
+  @Get('my-tasks')
+  @RequirePermissions('project.read')
+  getMyTasks(@CurrentUser() user: Record<string, unknown>) {
+    const roles  = extractUserRoles(user);
+    const deptId = (user.departmentId as string | null) ?? null;
+    return this.svc.getMyTasks(user.id as string, roles, deptId);
   }
 }

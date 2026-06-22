@@ -4,19 +4,31 @@ import {
   useState, useEffect, useCallback, useRef, FormEvent,
 } from 'react';
 import {
-  X, MessageSquare, Loader2, Clock, User, Pencil,
-  Trash2, Check, AlertCircle, MoreHorizontal,
+  X, Loader2, Clock, User, Pencil,
+  Trash2, Check, AlertCircle, MoreHorizontal, RefreshCw, Info, MessageSquare,
 } from 'lucide-react';
 import { apiGet, apiPatchAuth, apiPostAuth, apiDeleteAuth } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import { StatusBadge, PriorityBadge } from '@/components/status-badge';
+import { StatusBadge } from '@/components/status-badge';
 import { FileAttachmentSection } from '@/features/file-attachments/file-attachment-section';
 import { useAutosave } from '@/hooks/use-autosave';
 import type { TaskDetail, TaskComment, ActivityEvent, TaskSummary, LinkedRecord } from './types';
 import { Link2, Link2Off } from 'lucide-react';
+import {
+  TASK_STATUS_TRANSITIONS,
+  STATUS_CONFIRM_CONFIG, STATUS_BADGE_COLORS,
+  TASK_STATUS_DISPLAY_NAMES, ALL_TASK_STATUSES, SENSITIVE_TARGET_STATUSES,
+  MEMBER_STATUS_ACTION_LABELS, STATUS_DISPLAY_LABELS,
+  type StatusTier,
+} from '@/lib/task-status';
+import { TaskBadgeSelect, type BadgeOption } from '@/components/task-badge-select';
 
-const STATUSES  = ['TODO', 'IN_PROGRESS', 'WAITING_REVIEW', 'COMPLETED', 'REJECTED', 'CANCELLED'] as const;
-const PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as const;
+const PRIORITY_OPTIONS: BadgeOption[] = [
+  { value: 'LOW',      label: 'LOW',      bg: 'var(--bg-muted)',           color: 'var(--text-muted)' },
+  { value: 'MEDIUM',   label: 'MEDIUM',   bg: 'var(--accent-soft)',         color: 'var(--accent-primary)' },
+  { value: 'HIGH',     label: 'HIGH',     bg: 'var(--state-warning-soft)', color: 'var(--state-warning)' },
+  { value: 'CRITICAL', label: 'CRITICAL', bg: 'var(--state-error-soft)',   color: 'var(--state-error)' },
+];
 
 const ELEVATED_ROLES = ['SUPER_ADMIN', 'IT_ADMIN', 'ISO_MANAGER', 'QHSE_USER', 'SUPER_USER'];
 
@@ -49,9 +61,11 @@ interface Props {
   onDeleted?: () => void;
   externalUpdateKey?: number;
   linkedRecordsUpdateKey?: number;
+  /** When set, Files section shows an alert note and scrolls to the matching file */
+  highlightFileId?: string;
 }
 
-export function TaskDetailPanel({ taskId, onClose, onUpdated, onDeleted, externalUpdateKey, linkedRecordsUpdateKey }: Props) {
+export function TaskDetailPanel({ taskId, onClose, onUpdated, onDeleted, externalUpdateKey, linkedRecordsUpdateKey, highlightFileId }: Props) {
   const { token, user } = useAuth();
 
   // ── Core data ────────────────────────────────────────────────────────────
@@ -87,6 +101,18 @@ export function TaskDetailPanel({ taskId, onClose, onUpdated, onDeleted, externa
   const [conflict, setConflict] = useState(false);
   const isDirtyRef = useRef(false); // true when user has unsaved local edits
 
+  // ── Status select + confirmation dialog ──────────────────────────────────
+  // displayStatus drives the select's visible value independently from task.status.
+  // On sensitive selections it shows the pending value until modal resolves.
+  const [displayStatus,  setDisplayStatus]  = useState('');
+  const [pendingStatus,  setPendingStatus]  = useState<string | null>(null);
+  const [statusReason,   setStatusReason]   = useState('');
+  const [statusChanging, setStatusChanging] = useState(false);
+  const [statusError,    setStatusError]    = useState('');
+
+  // ── Priority saving state ─────────────────────────────────────────────────
+  const [prioritySaving, setPrioritySaving] = useState(false);
+
   // ── Comments ─────────────────────────────────────────────────────────────
   const [newComment,      setNewComment]      = useState('');
   const [commentLoading,  setCommentLoading]  = useState(false);
@@ -99,7 +125,56 @@ export function TaskDetailPanel({ taskId, onClose, onUpdated, onDeleted, externa
   const canDelete  = user?.permissions?.includes('tasks.delete')  ?? false;
   const isElevated = (user?.roles as string[] | undefined)?.some((r) => ELEVATED_ROLES.includes(r)) ?? false;
   const canDeleteTask = canDelete || isElevated;
+  // isLocked: non-elevated users cannot edit COMPLETED/CANCELLED task fields (title/description/assignee)
+  // Status changes are still possible via the controlled action UI for authorized users.
   const isLocked  = task ? ['COMPLETED', 'CANCELLED'].includes(task.status) && !isElevated : false;
+  // Assignee check: the logged-in user is the task assignee
+  const isAssignee = !!task && task.assigneeId === user?.id;
+  // Upload eligibility: elevated/managers (via tasks.update) OR the task's assignee can upload supporting files.
+  // Assignee upload uses project.read permission (already available); no tasks.update required.
+  const canUploadTaskFile = (canUpdate || isAssignee) && !isLocked;
+
+  // Determine role tier for transition map
+  const wsRole    = (task as { myRole?: string } | null)?.myRole ?? null;
+  const isWsOwnerOrManager = wsRole === 'OWNER' || wsRole === 'MANAGER';
+  // Assignees without elevated/update permissions use MEMBER tier (limited transitions: TODO→IN_PROGRESS, IN_PROGRESS→WAITING_REVIEW, REJECTED→IN_PROGRESS)
+  const statusTier: StatusTier = isElevated || canUpdate ? 'ELEVATED' : isWsOwnerOrManager ? 'MANAGER' : 'MEMBER';
+
+  // Valid next statuses for the current task status + role
+  const validNextStatuses: string[] = task
+    ? (TASK_STATUS_TRANSITIONS[statusTier][task.status] ?? [])
+    : [];
+
+  // Sync displayStatus whenever the server-committed status changes
+  useEffect(() => {
+    if (task?.status) setDisplayStatus(task.status);
+  }, [task?.status]);
+
+  // Options shown in the dropdown:
+  // • ELEVATED / canUpdate: full control
+  // • Assignee (isAssignee) without canUpdate: limited transitions via MEMBER tier
+  // • Viewer / non-assignee without canUpdate: no dropdown (static badge)
+  const canChangeStatus = canUpdate || isAssignee;
+  const dropdownOptions: string[] = !canChangeStatus ? [] : isElevated
+    ? [...ALL_TASK_STATUSES]
+    : task
+      ? [task.status, ...validNextStatuses.filter((s) => s !== task.status)]
+      : [];
+
+  // Convert to BadgeOption[] for TaskBadgeSelect.
+  // Unit 62: for MEMBER tier, use action-oriented labels for transition targets
+  // ("Mark Work Complete" instead of "AWAITING REVIEW"; "Start Work" instead of "IN PROGRESS").
+  // The current status shows its display name; only transition targets get action labels.
+  const statusDropdownOptions: BadgeOption[] = dropdownOptions.map((s) => {
+    const isCurrent = s === task?.status;
+    let label: string;
+    if (!isCurrent && statusTier === 'MEMBER' && MEMBER_STATUS_ACTION_LABELS[s]) {
+      label = MEMBER_STATUS_ACTION_LABELS[s];
+    } else {
+      label = TASK_STATUS_DISPLAY_NAMES[s] ?? s;
+    }
+    return { value: s, label, ...(STATUS_BADGE_COLORS[s] ?? STATUS_BADGE_COLORS.TODO) };
+  });
 
   // ── Load ──────────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
@@ -125,7 +200,11 @@ export function TaskDetailPanel({ taskId, onClose, onUpdated, onDeleted, externa
   // Load dropdown options after task loads
   useEffect(() => {
     if (!token || !task) return;
-    apiGet<UserOption[]>('/users/search?isActive=true', token).then(setUserOptions).catch(() => {});
+    // Load eligible assignees: workspace members with MEMBER|MANAGER|OWNER role only
+    // Falls back to empty list (no assignment UI) if the endpoint is unavailable.
+    apiGet<UserOption[]>(`/workspaces/${task.workspaceId}/members/eligible`, token)
+      .then(setUserOptions)
+      .catch(() => {});
     apiGet<{ taskLists: ListOption[] }>(`/workspaces/${task.workspaceId}`, token)
       .then((ws) => setListOptions(ws.taskLists))
       .catch(() => {});
@@ -152,14 +231,115 @@ export function TaskDetailPanel({ taskId, onClose, onUpdated, onDeleted, externa
 
   const { status: descSaveStatus, schedule: scheduleDescSave, flush: flushDesc } = useAutosave(saveDesc, 1500);
 
-  // ── Instant field save ────────────────────────────────────────────────────
-  async function saveField(patch: Partial<Pick<TaskSummary, 'status' | 'priority' | 'assigneeId' | 'dueDate' | 'taskListId'>>) {
+  // ── Instant field save (non-status fields only) ───────────────────────────
+  async function saveField(patch: Partial<Pick<TaskSummary, 'priority' | 'assigneeId' | 'dueDate' | 'taskListId'>> & { stopRecurrence?: boolean }) {
     if (!task || !token) return;
     try {
       const updated = await apiPatchAuth<TaskSummary>(`/tasks/${task.id}`, patch, token);
       setTask((prev) => prev ? { ...prev, ...updated } : null);
       onUpdated(updated);
     } catch { /* ignore */ }
+  }
+
+  // ── Priority save with loading state ─────────────────────────────────────
+  async function savePriority(priority: string) {
+    if (!task || !token) return;
+    const prev = task.priority;
+    setPrioritySaving(true);
+    try {
+      const updated = await apiPatchAuth<TaskSummary>(`/tasks/${task.id}`, { priority }, token);
+      setTask((p) => p ? { ...p, ...updated } : null);
+      onUpdated(updated);
+    } catch {
+      // revert optimistically if task state already changed
+      setTask((p) => p ? { ...p, priority: prev } : null);
+    } finally {
+      setPrioritySaving(false);
+    }
+  }
+
+  // ── Status select handlers ────────────────────────────────────────────────
+
+  function closeStatusDialog() {
+    // Revert the select to the real committed status on cancel
+    if (task?.status) setDisplayStatus(task.status);
+    setPendingStatus(null);
+    setStatusReason('');
+    setStatusError('');
+  }
+
+  // Called from the <select> onChange. Decides immediate save vs. modal.
+  function handleDropdownChange(newStatus: string) {
+    if (!task || newStatus === task.status) return;
+    // Show the selection immediately in the dropdown
+    setDisplayStatus(newStatus);
+    setStatusError('');
+    if (SENSITIVE_TARGET_STATUSES.has(newStatus)) {
+      // Requires confirmation (and possibly a reason)
+      setPendingStatus(newStatus);
+      setStatusReason('');
+    } else {
+      // Routine change — save immediately without modal
+      void immediateStatusChange(newStatus);
+    }
+  }
+
+  async function immediateStatusChange(newStatus: string) {
+    if (!task || !token) return;
+    setStatusChanging(true);
+    try {
+      const updated = await apiPatchAuth<TaskSummary>(`/tasks/${task.id}/status`, {
+        newStatus,
+        source:           'WORKSPACE_TASK_DRAWER',
+        expectedUpdatedAt: task.updatedAt,
+      }, token);
+      setTask((prev) => prev ? { ...prev, ...updated } : null);
+      onUpdated(updated);
+      void apiGet<ActivityEvent[]>(`/tasks/${taskId}/activity`, token).then(setActivity).catch(() => {});
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to change status.';
+      setDisplayStatus(task.status); // revert on failure
+      if (msg.toLowerCase().includes('refresh') || msg.toLowerCase().includes('conflict')) {
+        setConflict(true);
+      }
+      setStatusError(msg);
+    } finally {
+      setStatusChanging(false);
+    }
+  }
+
+  async function confirmStatusChange() {
+    if (!task || !token || !pendingStatus) return;
+    const cfg = STATUS_CONFIRM_CONFIG[pendingStatus];
+    if (cfg?.reasonRequired && !statusReason.trim()) {
+      setStatusError('Please provide a reason before continuing.');
+      return;
+    }
+    setStatusChanging(true);
+    setStatusError('');
+    try {
+      const updated = await apiPatchAuth<TaskSummary>(`/tasks/${task.id}/status`, {
+        newStatus:         pendingStatus,
+        reason:            statusReason.trim() || undefined,
+        source:            'WORKSPACE_TASK_DRAWER',
+        expectedUpdatedAt: task.updatedAt,
+      }, token);
+      setTask((prev) => prev ? { ...prev, ...updated } : null);
+      onUpdated(updated);
+      setPendingStatus(null);
+      setStatusReason('');
+      setStatusError('');
+      void apiGet<ActivityEvent[]>(`/tasks/${taskId}/activity`, token).then(setActivity).catch(() => {});
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to change status.';
+      setDisplayStatus(task.status); // revert on failure
+      if (msg.toLowerCase().includes('refresh') || msg.toLowerCase().includes('conflict')) {
+        setConflict(true);
+      }
+      setStatusError(msg);
+    } finally {
+      setStatusChanging(false);
+    }
   }
 
   async function saveTitle() {
@@ -281,19 +461,63 @@ export function TaskDetailPanel({ taskId, onClose, onUpdated, onDeleted, externa
   function formatDateTime(iso: string) {
     return new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
   }
+  function formatKuwait(iso: string | null | undefined): string {
+    if (!iso) return 'Not available';
+    try {
+      return new Date(iso).toLocaleString('en-GB', {
+        timeZone: 'Asia/Kuwait',
+        day: '2-digit', month: 'long', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: true,
+      });
+    } catch { return iso; }
+  }
 
   return (
     <div className="fixed inset-0 z-40 flex" onClick={onClose}>
       <div className="flex-1" />
       <div
-        className="flex h-full w-[500px] flex-col shadow-xl"
+        className="flex h-full w-full max-w-[680px] flex-col shadow-xl"
         style={{ backgroundColor: 'var(--bg-surface)', borderLeft: '1px solid var(--border-default)' }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between border-b px-5 py-3" style={{ borderColor: 'var(--border-default)' }}>
-          <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Task Details</span>
-          <button type="button" onClick={onClose} style={{ color: 'var(--text-muted)' }} aria-label="Close">
+        {/* Header — shows task context when loaded */}
+        <div className="flex items-start justify-between gap-3 border-b px-5 py-3" style={{ borderColor: 'var(--border-default)' }}>
+          {task ? (
+            <div className="flex-1 min-w-0">
+              <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                <StatusBadge status={task.status} size="xs" />
+                {task.isReference ? (
+                  <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium"
+                    style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent-primary)', border: '1px solid var(--accent-primary)' }}>
+                    Reference Only
+                  </span>
+                ) : (
+                  <span
+                    className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                    style={{
+                      backgroundColor: (PRIORITY_OPTIONS.find((p) => p.value === task.priority) ?? PRIORITY_OPTIONS[0]).bg,
+                      color:           (PRIORITY_OPTIONS.find((p) => p.value === task.priority) ?? PRIORITY_OPTIONS[0]).color,
+                    }}
+                  >
+                    {task.priority}
+                  </span>
+                )}
+                {task.recurrenceInterval && task.recurrenceInterval !== 'NONE' && (
+                  <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium"
+                    style={{ backgroundColor: 'var(--bg-muted)', color: 'var(--text-muted)' }}>
+                    <RefreshCw className="h-2.5 w-2.5" />
+                    {{'MONTHLY':'Monthly','QUARTERLY':'Quarterly','SEMIANNUAL':'Every 6 mo','ANNUAL':'Annual'}[task.recurrenceInterval] ?? task.recurrenceInterval}
+                  </span>
+                )}
+              </div>
+              <h2 className="text-sm font-semibold line-clamp-2 leading-snug" style={{ color: 'var(--text-primary)' }}>
+                {task.title}
+              </h2>
+            </div>
+          ) : (
+            <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Task Details</span>
+          )}
+          <button type="button" onClick={onClose} style={{ color: 'var(--text-muted)' }} aria-label="Close" className="flex-shrink-0 mt-0.5">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -369,47 +593,161 @@ export function TaskDetailPanel({ taskId, onClose, onUpdated, onDeleted, externa
                 )}
               </div>
 
+              {/* Reference helper */}
+              {task.isReference && (
+                <div className="flex items-start gap-2 rounded-lg px-3 py-2"
+                  style={{ backgroundColor: 'var(--accent-soft)', border: '1px solid var(--accent-primary)' }}>
+                  <Info className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" style={{ color: 'var(--accent-primary)' }} />
+                  <div>
+                    <p className="text-xs font-medium" style={{ color: 'var(--accent-primary)' }}>Reference Only</p>
+                    <p className="text-[11px] mt-0.5" style={{ color: 'var(--accent-primary)', opacity: 0.85 }}>
+                      Informational item — excluded from overdue and unassigned task alerts.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {/* Status + Priority row */}
               <div className="flex flex-wrap items-center gap-2">
-                {canUpdate && !isLocked ? (
-                  <select
-                    value={task.status}
-                    onChange={(e) => void saveField({ status: e.target.value })}
-                    className="rounded-full border-0 py-0.5 pl-2 pr-6 text-xs font-medium outline-none appearance-none"
-                    style={{
-                      backgroundColor: task.status === 'COMPLETED' ? 'var(--state-success-soft)' :
-                                       task.status === 'IN_PROGRESS' ? 'var(--accent-soft)' :
-                                       task.status === 'WAITING_REVIEW' ? 'var(--state-warning-soft)' :
-                                       task.status === 'REJECTED' ? 'var(--state-error-soft)' : 'var(--bg-muted)',
-                      color: task.status === 'COMPLETED' ? 'var(--state-success)' :
-                             task.status === 'IN_PROGRESS' ? 'var(--accent-primary)' :
-                             task.status === 'WAITING_REVIEW' ? 'var(--state-warning)' :
-                             task.status === 'REJECTED' ? 'var(--state-error)' : 'var(--text-muted)',
-                    }}
-                  >
-                    {STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
-                  </select>
-                ) : (
-                  <StatusBadge status={task.status} size="xs" />
+                {/* Status — polished custom select (or static badge for viewers) */}
+                <TaskBadgeSelect
+                  value={displayStatus || task.status}
+                  options={statusDropdownOptions}
+                  onChange={handleDropdownChange}
+                  disabled={statusChanging}
+                  saving={statusChanging}
+                  readOnly={statusDropdownOptions.length === 0}
+                  menuWidth={230}
+                  ariaLabel="Task status"
+                />
+                {/* Inline status error shown outside modal path */}
+                {statusError && !pendingStatus && (
+                  <span className="text-[10px]" style={{ color: 'var(--state-error)' }}>{statusError}</span>
                 )}
 
-                {canUpdate && !isLocked ? (
-                  <select
-                    value={task.priority}
-                    onChange={(e) => void saveField({ priority: e.target.value })}
-                    className="rounded-full border-0 py-0.5 pl-2 pr-6 text-xs font-medium outline-none appearance-none"
-                    style={{ backgroundColor: 'var(--bg-muted)', color: 'var(--text-secondary)' }}
+                {/* Priority — Reference Only badge OR custom priority select */}
+                {task.isReference ? (
+                  <span
+                    className="inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold"
+                    style={{
+                      backgroundColor: 'var(--accent-soft)',
+                      color:           'var(--accent-primary)',
+                      borderColor:     'var(--border-default)',
+                    }}
                   >
-                    {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
-                  </select>
+                    Reference Only
+                  </span>
                 ) : (
-                  <PriorityBadge priority={task.priority} />
+                  <TaskBadgeSelect
+                    value={task.priority}
+                    options={PRIORITY_OPTIONS}
+                    onChange={(v) => void savePriority(v)}
+                    saving={prioritySaving}
+                    readOnly={!canUpdate || isLocked}
+                    menuWidth={180}
+                    ariaLabel="Task priority"
+                  />
+                )}
+
+                {/* Recurrence badge */}
+                {task.recurrenceInterval && task.recurrenceInterval !== 'NONE' && (
+                  <span
+                    className="rounded-full px-2 py-0.5 text-xs font-medium"
+                    style={{ backgroundColor: 'var(--bg-muted)', color: 'var(--text-muted)' }}
+                  >
+                    {{MONTHLY:'Monthly',QUARTERLY:'Quarterly',SEMIANNUAL:'Every 6 mo',ANNUAL:'Annual'}[task.recurrenceInterval] ?? task.recurrenceInterval}
+                  </span>
                 )}
               </div>
 
-              {/* Meta grid */}
+              {/* ── Reviewer Panel (Part 14) — shown when WAITING_REVIEW and user is reviewer ─── */}
+              {task.status === 'WAITING_REVIEW' && (canUpdate || isElevated || isWsOwnerOrManager) && (() => {
+                // Find the WAITING_REVIEW submission event to get completion note + submitter
+                const submissionEvent = [...activity].reverse().find(
+                  (a) => a.action === 'STATUS_CHANGED' && a.metadata?.newStatus === 'WAITING_REVIEW',
+                );
+                const completionNote = submissionEvent?.metadata?.reason as string | null | undefined;
+                const submittedAt    = submissionEvent?.createdAt;
+                const submittedBy    = submissionEvent?.actor?.fullName ?? task.assignee?.fullName ?? 'Assignee';
+                return (
+                  <div className="rounded-xl border-2 p-4"
+                    style={{ borderColor: 'var(--state-warning)', backgroundColor: 'var(--state-warning-soft)' }}>
+                    <div className="mb-3 flex items-center gap-2">
+                      <Info className="h-4 w-4 shrink-0" style={{ color: 'var(--state-warning)' }} />
+                      <p className="text-sm font-semibold" style={{ color: 'var(--state-warning)' }}>
+                        Work Submitted for Review
+                      </p>
+                    </div>
+                    <div className="space-y-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                      <div><span style={{ color: 'var(--text-muted)' }}>Submitted by:</span> <strong>{submittedBy}</strong></div>
+                      {submittedAt && (
+                        <div>
+                          <span style={{ color: 'var(--text-muted)' }}>Submitted:</span>{' '}
+                          {new Date(submittedAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        </div>
+                      )}
+                      {completionNote && (
+                        <div>
+                          <p style={{ color: 'var(--text-muted)' }} className="mb-0.5">Completion note:</p>
+                          <p className="italic rounded p-2" style={{ backgroundColor: 'rgba(255,255,255,0.5)', color: 'var(--text-primary)' }}>
+                            &ldquo;{completionNote}&rdquo;
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-3 flex gap-2 flex-wrap">
+                      <button type="button"
+                        onClick={() => {
+                          setDisplayStatus('COMPLETED');
+                          const cfg = STATUS_CONFIRM_CONFIG['COMPLETED'];
+                          if (cfg) { setPendingStatus('COMPLETED'); setStatusReason(''); setStatusError(''); }
+                        }}
+                        className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white"
+                        style={{ backgroundColor: 'var(--state-success)' }}>
+                        ✓ Approve Completion
+                      </button>
+                      <button type="button"
+                        onClick={() => {
+                          setDisplayStatus('REJECTED');
+                          const cfg = STATUS_CONFIRM_CONFIG['REJECTED'];
+                          if (cfg) { setPendingStatus('REJECTED'); setStatusReason(''); setStatusError(''); }
+                        }}
+                        className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white"
+                        style={{ backgroundColor: 'var(--state-error)' }}>
+                        ✗ Return for Correction
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* ── Assignee completion context for MEMBER (non-reviewer) ─── */}
+              {task.status === 'WAITING_REVIEW' && !canUpdate && !isElevated && !isWsOwnerOrManager && (() => {
+                const submissionEvent = [...activity].reverse().find(
+                  (a) => a.action === 'STATUS_CHANGED' && a.metadata?.newStatus === 'WAITING_REVIEW',
+                );
+                const completionNote = submissionEvent?.metadata?.reason as string | null | undefined;
+                return (
+                  <div className="rounded-xl border p-3"
+                    style={{ borderColor: 'var(--state-warning)30', backgroundColor: 'var(--state-warning-soft)' }}>
+                    <p className="text-xs font-medium mb-1" style={{ color: 'var(--state-warning)' }}>
+                      Work submitted — awaiting review
+                    </p>
+                    {completionNote && (
+                      <p className="text-xs italic" style={{ color: 'var(--text-secondary)' }}>
+                        &ldquo;{completionNote}&rdquo;
+                      </p>
+                    )}
+                    <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                      A reviewer will approve or return this task.
+                    </p>
+                  </div>
+                );
+              })()}
+
+              {/* Meta grid — 3 rows × 2 cols */}
               <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
-                {/* Assignee */}
+                {/* Row 1: Assignee | Due Date */}
                 <div>
                   <dt className="mb-1 text-xs" style={{ color: 'var(--text-muted)' }}>Assignee</dt>
                   {canUpdate && !isLocked && userOptions.length > 0 ? (
@@ -423,16 +761,16 @@ export function TaskDetailPanel({ taskId, onClose, onUpdated, onDeleted, externa
                       {userOptions.map((u) => <option key={u.id} value={u.id}>{u.fullName}</option>)}
                     </select>
                   ) : (
-                    <dd className="flex items-center gap-1" style={{ color: 'var(--text-secondary)' }}>
+                    <dd className="flex items-center gap-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
                       <User className="h-3.5 w-3.5 flex-shrink-0" />
                       {task.assignee?.fullName ?? <span style={{ color: 'var(--text-disabled)' }}>Unassigned</span>}
                     </dd>
                   )}
                 </div>
-
-                {/* Due date */}
                 <div>
-                  <dt className="mb-1 text-xs" style={{ color: 'var(--text-muted)' }}>Due Date</dt>
+                  <dt className="mb-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                    {task.isReference ? 'Review Date' : 'Due Date'}
+                  </dt>
                   {canUpdate && !isLocked ? (
                     <input
                       type="date"
@@ -442,20 +780,14 @@ export function TaskDetailPanel({ taskId, onClose, onUpdated, onDeleted, externa
                       style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)', color: 'var(--text-primary)' }}
                     />
                   ) : (
-                    <dd className="flex items-center gap-1" style={{ color: 'var(--text-secondary)' }}>
+                    <dd className="flex items-center gap-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
                       <Clock className="h-3.5 w-3.5 flex-shrink-0" />
-                      {task.dueDate ? formatDate(task.dueDate) : <span style={{ color: 'var(--text-disabled)' }}>—</span>}
+                      {task.dueDate ? formatDate(task.dueDate) : <span style={{ color: 'var(--text-disabled)' }}>Not set</span>}
                     </dd>
                   )}
                 </div>
 
-                {/* Created by */}
-                <div>
-                  <dt className="mb-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>Created By</dt>
-                  <dd style={{ color: 'var(--text-secondary)' }}>{task.createdBy.fullName}</dd>
-                </div>
-
-                {/* Task list */}
+                {/* Row 2: Task List | Created By */}
                 <div>
                   <dt className="mb-1 text-xs" style={{ color: 'var(--text-muted)' }}>Task List</dt>
                   {canUpdate && !isLocked && listOptions.length > 1 ? (
@@ -468,10 +800,59 @@ export function TaskDetailPanel({ taskId, onClose, onUpdated, onDeleted, externa
                       {listOptions.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
                     </select>
                   ) : (
-                    <dd style={{ color: 'var(--text-secondary)' }}>{task.taskList.name}</dd>
+                    <dd className="text-xs" style={{ color: 'var(--text-secondary)' }}>{task.taskList.name}</dd>
                   )}
                 </div>
+                <div>
+                  <dt className="mb-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>Created By</dt>
+                  <dd className="text-xs" style={{ color: 'var(--text-secondary)' }}>{task.createdBy.fullName}</dd>
+                </div>
+
+                {/* Row 3: Created | Task Last Modified */}
+                <div>
+                  <dt className="mb-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>Created</dt>
+                  <dd className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                    {formatKuwait(task.createdAt)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="mb-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>Task Last Modified</dt>
+                  <dd className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                    {formatKuwait(task.updatedAt)}
+                  </dd>
+                  <p className="text-[10px] mt-0.5 leading-tight" style={{ color: 'var(--text-disabled)' }}>
+                    Updates when task fields, status, or assignment change.
+                  </p>
+                </div>
               </dl>
+
+              {/* Row 4: Last Status Change (derived from activity) */}
+              {(() => {
+                const lastChange = activity.find(
+                  (a) => a.action === 'STATUS_CHANGED' && a.metadata?.newStatus,
+                );
+                if (!lastChange) return null;
+                return (
+                  <div className="mt-1 rounded-xl p-3" style={{ backgroundColor: 'var(--bg-subtle)', border: '1px solid var(--border-default)' }}>
+                    <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                      <div>
+                        <dt className="mb-0.5" style={{ color: 'var(--text-muted)' }}>Last Status Change</dt>
+                        <dd style={{ color: 'var(--text-secondary)' }}>{formatDateTime(lastChange.createdAt)}</dd>
+                      </div>
+                      <div>
+                        <dt className="mb-0.5" style={{ color: 'var(--text-muted)' }}>Changed By</dt>
+                        <dd style={{ color: 'var(--text-secondary)' }}>{lastChange.actor.fullName}</dd>
+                      </div>
+                      {lastChange.metadata?.reason && (
+                        <div className="col-span-2">
+                          <dt className="mb-0.5" style={{ color: 'var(--text-muted)' }}>Reason</dt>
+                          <dd className="italic" style={{ color: 'var(--text-secondary)' }}>&ldquo;{lastChange.metadata.reason}&rdquo;</dd>
+                        </div>
+                      )}
+                    </dl>
+                  </div>
+                );
+              })()}
 
               {/* Description */}
               <div>
@@ -518,7 +899,7 @@ export function TaskDetailPanel({ taskId, onClose, onUpdated, onDeleted, externa
                       whiteSpace: 'pre-wrap',
                     }}
                   >
-                    {task.description || (canUpdate && !isLocked ? 'Click to add a description…' : '—')}
+                    {task.description || (canUpdate && !isLocked ? 'Click to add a description…' : 'No description added.')}
                   </div>
                 )}
               </div>
@@ -540,18 +921,104 @@ export function TaskDetailPanel({ taskId, onClose, onUpdated, onDeleted, externa
                 </div>
               )}
 
+              {/* Recurrence section */}
+              {task.recurrenceInterval && task.recurrenceInterval !== 'NONE' && (
+                <div
+                  className="rounded-lg px-3 py-2.5"
+                  style={{ backgroundColor: 'var(--bg-muted)', border: '1px solid var(--border-default)' }}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
+                        Recurrence
+                      </p>
+                      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                        <div>
+                          <dt className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Repeat</dt>
+                          <dd style={{ color: 'var(--text-secondary)' }}>
+                            {{'MONTHLY':'Every 1 Month','QUARTERLY':'Every 3 Months','SEMIANNUAL':'Every 6 Months','ANNUAL':'Every 1 Year'}[task.recurrenceInterval] ?? task.recurrenceInterval}
+                          </dd>
+                        </div>
+                        {task.recurrenceEndDate && (
+                          <div>
+                            <dt className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Ends</dt>
+                            <dd style={{ color: 'var(--text-secondary)' }}>
+                              {new Date(task.recurrenceEndDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                            </dd>
+                          </div>
+                        )}
+                        {task.recurrenceSeriesId && (
+                          <div className="col-span-2">
+                            <dt className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Note</dt>
+                            <dd className="text-[10px]" style={{ color: 'var(--text-disabled)' }}>
+                              Changes apply to this occurrence only.
+                            </dd>
+                          </div>
+                        )}
+                      </dl>
+                    </div>
+                    {(canUpdate || isElevated) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (confirm('Stop future recurrence? No additional occurrences will be created. Existing tasks are unaffected.')) {
+                            void saveField({ stopRecurrence: true });
+                          }
+                        }}
+                        className="flex-shrink-0 text-xs px-2.5 py-1 rounded-lg border transition-colors"
+                        style={{ color: 'var(--state-error)', borderColor: 'var(--state-error)', background: 'none' }}
+                      >
+                        Stop
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Files section */}
               <div className="border-b" style={{ borderColor: 'var(--border-default)' }}>
+                {highlightFileId && (
+                  <div className="mx-4 mt-3 flex items-center gap-2 rounded-md px-3 py-2"
+                    style={{ backgroundColor: 'var(--state-warning-soft)', border: '1px solid var(--state-warning)' }}>
+                    <span className="text-[11px] font-medium" style={{ color: 'var(--state-warning)' }}>
+                      Opened from expiry alert — see the highlighted file below.
+                    </span>
+                  </div>
+                )}
                 <FileAttachmentSection
                   entityType="TASK"
                   entityId={task.id}
                   uploadEndpoint={`/tasks/${task.id}/attachments`}
                   listEndpoint={`/tasks/${task.id}/attachments`}
-                  canUpload={(canUpdate && !isLocked) ?? false}
+                  canUpload={canUploadTaskFile}
                   canDelete={canUpdate || isElevated}
+                  showExpiryTracking
                   compact
                 />
               </div>
+
+              {/* Latest Activity — compact strip using existing ActivityEvent data */}
+              {activity.length > 0 ? (
+                <div className="flex items-center gap-2 rounded-lg px-3 py-2"
+                  style={{ backgroundColor: 'var(--bg-muted)', border: '1px solid var(--border-subtle)' }}>
+                  <p className="text-[10px] font-medium flex-shrink-0" style={{ color: 'var(--text-disabled)' }}>Latest Activity</p>
+                  {(() => {
+                    const latest = activity[activity.length - 1];
+                    const diff   = Date.now() - new Date(latest.createdAt).getTime();
+                    const mins   = Math.floor(diff / 60000);
+                    const rel    = mins < 1 ? 'just now' : mins < 60 ? `${mins}m ago` : Math.floor(mins / 60) < 24 ? `${Math.floor(mins / 60)}h ago` : `${Math.floor(mins / 1440)}d ago`;
+                    return (
+                      <p className="text-[11px] min-w-0 truncate" style={{ color: 'var(--text-secondary)' }}>
+                        {latest.summary ?? latest.action.toLowerCase().replace(/_/g, ' ')}
+                        {latest.actor && ` by ${latest.actor.fullName}`}
+                        {' · '}{rel}
+                      </p>
+                    );
+                  })()}
+                </div>
+              ) : (
+                <p className="text-[11px]" style={{ color: 'var(--text-disabled)' }}>No recent activity.</p>
+              )}
 
               {/* Tab bar */}
               <div className="flex gap-3 border-b" style={{ borderColor: 'var(--border-default)' }}>
@@ -690,21 +1157,59 @@ export function TaskDetailPanel({ taskId, onClose, onUpdated, onDeleted, externa
 
               {/* Activity tab */}
               {activeTab === 'activity' && (
-                <ul className="flex flex-col gap-2">
-                  {activity.map((a) => (
-                    <li key={a.id} className="flex items-start gap-2">
-                      <div className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full" style={{ backgroundColor: 'var(--accent-primary)' }} />
-                      <div>
-                        <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>{a.actor.fullName} </span>
-                        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{a.summary}</span>
-                        <p className="text-[10px]" style={{ color: 'var(--text-disabled)' }}>{formatDateTime(a.createdAt)}</p>
+                <div className="flex flex-col gap-4">
+                  {/* Compact status history section */}
+                  {(() => {
+                    const statusChanges = activity.filter(
+                      (a) => a.action === 'STATUS_CHANGED' && a.metadata?.previousStatus,
+                    );
+                    if (statusChanges.length === 0) return null;
+                    return (
+                      <div className="rounded-xl p-3 space-y-2" style={{ backgroundColor: 'var(--bg-subtle)', border: '1px solid var(--border-default)' }}>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Status History</p>
+                        <ul className="flex flex-col gap-2">
+                          {statusChanges.slice(0, 5).map((a) => (
+                            <li key={a.id} className="flex flex-col gap-0.5">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <StatusBadge status={a.metadata!.previousStatus!} size="xs" />
+                                <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>→</span>
+                                <StatusBadge status={a.metadata!.newStatus!} size="xs" />
+                                <span className="text-[10px]" style={{ color: 'var(--text-disabled)' }}>by {a.actor.fullName} · {formatDateTime(a.createdAt)}</span>
+                              </div>
+                              {a.metadata?.reason && (
+                                <p className="text-[10px] italic pl-1" style={{ color: 'var(--text-muted)' }}>
+                                  &ldquo;{a.metadata.reason}&rdquo;
+                                </p>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
                       </div>
-                    </li>
-                  ))}
-                  {activity.length === 0 && (
-                    <p className="text-sm" style={{ color: 'var(--text-disabled)' }}>No activity yet.</p>
-                  )}
-                </ul>
+                    );
+                  })()}
+
+                  {/* Full activity list */}
+                  <ul className="flex flex-col gap-2">
+                    {activity.map((a) => (
+                      <li key={a.id} className="flex items-start gap-2">
+                        <div className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full" style={{ backgroundColor: 'var(--accent-primary)' }} />
+                        <div>
+                          <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>{a.actor.fullName} </span>
+                          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{a.summary}</span>
+                          {a.metadata?.reason && a.action === 'STATUS_CHANGED' && (
+                            <p className="text-[10px] italic mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                              Reason: &ldquo;{a.metadata.reason}&rdquo;
+                            </p>
+                          )}
+                          <p className="text-[10px]" style={{ color: 'var(--text-disabled)' }}>{formatDateTime(a.createdAt)}</p>
+                        </div>
+                      </li>
+                    ))}
+                    {activity.length === 0 && (
+                      <p className="text-sm" style={{ color: 'var(--text-disabled)' }}>No activity yet.</p>
+                    )}
+                  </ul>
+                </div>
               )}
 
               {/* Linked records tab */}
@@ -885,6 +1390,96 @@ export function TaskDetailPanel({ taskId, onClose, onUpdated, onDeleted, externa
           </div>
         )}
       </div>
+
+      {/* Status change confirmation dialog */}
+      {pendingStatus && (() => {
+        const cfg = STATUS_CONFIRM_CONFIG[pendingStatus];
+        if (!cfg) return null;
+        const btnStyle: Record<string, { bg: string; hover: string }> = {
+          primary: { bg: 'var(--accent-primary)',  hover: 'var(--accent-hover)' },
+          danger:  { bg: 'var(--state-error)',      hover: '#b91c1c' },
+          warning: { bg: 'var(--state-warning)',    hover: '#b45309' },
+        };
+        const btn = btnStyle[cfg.confirmStyle] ?? btnStyle.primary;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
+            <div
+              className="relative w-full max-w-md rounded-2xl p-6 shadow-2xl flex flex-col gap-4"
+              style={{ backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-default)' }}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>{cfg.title}</h3>
+                <button
+                  type="button"
+                  onClick={closeStatusDialog}
+                  className="rounded p-1"
+                  style={{ color: 'var(--text-muted)' }}
+                  aria-label="Cancel"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* Body */}
+              <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>{cfg.body}</p>
+
+              {/* Reason / note field */}
+              {cfg.reasonLabel && (
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+                    {cfg.reasonLabel}
+                  </label>
+                  <textarea
+                    autoFocus
+                    rows={3}
+                    value={statusReason}
+                    onChange={(e) => setStatusReason(e.target.value)}
+                    placeholder={cfg.reasonPlaceholder}
+                    className="w-full resize-none rounded-lg px-3 py-2 text-sm outline-none"
+                    style={{ border: '1px solid var(--border-default)', backgroundColor: 'var(--bg-subtle)', color: 'var(--text-primary)' }}
+                    onFocus={(e) => (e.currentTarget.style.borderColor = 'var(--accent-primary)')}
+                    onBlur={(e) => (e.currentTarget.style.borderColor = 'var(--border-default)')}
+                  />
+                </div>
+              )}
+
+              {/* Error */}
+              {statusError && (
+                <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ backgroundColor: 'var(--state-error-soft)' }}>
+                  <AlertCircle className="h-4 w-4 flex-shrink-0" style={{ color: 'var(--state-error)' }} />
+                  <p className="text-xs" style={{ color: 'var(--state-error)' }}>{statusError}</p>
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={closeStatusDialog}
+                  disabled={statusChanging}
+                  className="rounded-lg px-4 py-2 text-sm font-medium"
+                  style={{ border: '1px solid var(--border-default)', color: 'var(--text-secondary)' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void confirmStatusChange()}
+                  disabled={statusChanging || (cfg.reasonRequired && !statusReason.trim())}
+                  className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+                  style={{ backgroundColor: btn.bg }}
+                  onMouseEnter={(e) => { if (!statusChanging) e.currentTarget.style.backgroundColor = btn.hover; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = btn.bg; }}
+                >
+                  {statusChanging && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  {cfg.confirmLabel}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

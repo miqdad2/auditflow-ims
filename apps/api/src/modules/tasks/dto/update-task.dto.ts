@@ -1,8 +1,9 @@
 import {
   IsString, IsOptional, MaxLength,
-  IsIn, IsDateString,
+  IsIn, IsDateString, IsBoolean,
 } from 'class-validator';
 import { TaskStatus, Priority } from '@auditflow/shared';
+import { RECURRENCE_INTERVALS } from './create-task.dto';
 
 export class UpdateTaskDto {
   @IsString()
@@ -24,6 +25,10 @@ export class UpdateTaskDto {
   @IsIn(Object.values(Priority))
   priority?: string;
 
+  @IsBoolean()
+  @IsOptional()
+  isReference?: boolean;
+
   @IsString()
   @IsOptional()
   assigneeId?: string | null;
@@ -35,4 +40,18 @@ export class UpdateTaskDto {
   @IsString()
   @IsOptional()
   taskListId?: string;
+
+  @IsString()
+  @IsOptional()
+  @IsIn(RECURRENCE_INTERVALS)
+  recurrenceInterval?: string;
+
+  @IsDateString()
+  @IsOptional()
+  recurrenceEndDate?: string | null;
+
+  // Stop future recurrence without deleting this task
+  @IsBoolean()
+  @IsOptional()
+  stopRecurrence?: boolean;
 }

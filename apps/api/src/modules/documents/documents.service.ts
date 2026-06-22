@@ -500,22 +500,22 @@ export class DocumentsService {
     if (newStatus === 'APPROVED' && existing.ownerId !== actorId) {
       void this.notifications.create({
         recipientId: existing.ownerId,
-        category: 'DOCUMENT_APPROVED',
-        title: 'Document Approved',
-        message: `Your document "${existing.title}" has been approved.`,
-        entityType: 'DOCUMENT',
-        entityId: id,
+        category:    'DOCUMENT_APPROVED',
+        title:       'Document Approved',
+        message:     `Your document "${existing.title}" has been approved.`,
+        entityType:  'DOCUMENT',
+        entityId:    id,
       });
     }
 
     if (newStatus === 'REJECTED' && existing.ownerId !== actorId) {
       void this.notifications.create({
         recipientId: existing.ownerId,
-        category: 'DOCUMENT_REJECTED',
-        title: 'Document Rejected',
-        message: `Your document "${existing.title}" was rejected.${dto.rejectionReason ? ` Reason: ${dto.rejectionReason}` : ''}`,
-        entityType: 'DOCUMENT',
-        entityId: id,
+        category:    'DOCUMENT_REJECTED',
+        title:       'Document Rejected',
+        message:     `Your document "${existing.title}" was rejected.${dto.rejectionReason ? ` Reason: ${dto.rejectionReason}` : ''}`,
+        entityType:  'DOCUMENT',
+        entityId:    id,
       });
     }
 
@@ -533,11 +533,11 @@ export class DocumentsService {
         if (reviewer.id !== actorId) {
           void this.notifications.create({
             recipientId: reviewer.id,
-            category: 'DOCUMENT_REVIEW_PENDING',
-            title: 'Document Submitted for Review',
-            message: `Document "${existing.title}" has been submitted for review.`,
-            entityType: 'DOCUMENT',
-            entityId: id,
+            category:    'DOCUMENT_REVIEW_PENDING',
+            title:       'Document Submitted for Review',
+            message:     `Document "${existing.title}" has been submitted for review.`,
+            entityType:  'DOCUMENT',
+            entityId:    id,
           });
         }
       }

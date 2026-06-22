@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Patch, Delete, Param, Body, UseGuards,
+  Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/permissions.guard';
@@ -136,6 +136,21 @@ export class WorkspacesController {
     return this.svc.getMembers(id);
   }
 
+  /** Eligible assignees: active MEMBER|MANAGER|OWNER for use in task assignee dropdowns. */
+  @Get(':id/members/eligible')
+  @RequirePermissions('project.read')
+  getEligibleAssignees(@Param('id') id: string) {
+    return this.svc.getEligibleAssignees(id);
+  }
+
+  /** Data integrity audit — read-only, elevated roles only. */
+  @Get(':id/integrity')
+  @RequirePermissions('project.read')
+  getIntegrity(@Param('id') id: string, @CurrentUser() user: Record<string, unknown>) {
+    const roles = extractUserRoles(user);
+    return this.svc.getIntegrity(id, roles);
+  }
+
   @Post(':id/members')
   @RequirePermissions('project.read')
   addMember(
@@ -157,13 +172,25 @@ export class WorkspacesController {
     return this.svc.updateMember(id, memberId, dto, user);
   }
 
+  /** Active-task impact check before removing a member. */
+  @Get(':id/members/:memberId/impact')
+  @RequirePermissions('project.read')
+  getMemberRemovalImpact(
+    @Param('id') id: string,
+    @Param('memberId') memberId: string,
+  ) {
+    return this.svc.getMemberRemovalImpact(id, memberId);
+  }
+
   @Delete(':id/members/:memberId')
   @RequirePermissions('project.read')
   removeMember(
     @Param('id') id: string,
     @Param('memberId') memberId: string,
+    @Query('taskHandling') taskHandling: string | undefined,
     @CurrentUser() user: Record<string, unknown>,
   ) {
-    return this.svc.removeMember(id, memberId, user);
+    const handling = taskHandling === 'leave-unassigned' ? 'leave-unassigned' : undefined;
+    return this.svc.removeMember(id, memberId, user, handling);
   }
 }

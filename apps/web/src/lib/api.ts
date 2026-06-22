@@ -156,6 +156,24 @@ export async function apiDeleteAuth<T>(path: string, token: string): Promise<T> 
   }
 }
 
+// Authenticated binary download — returns Blob for browser download
+export async function apiDownloadFile(path: string, token: string): Promise<{ blob: Blob; filename: string }> {
+  const res = await fetch(`${API_URL}${path}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 401) {
+    handle401();
+    throw new ApiError('Your session has expired. Please log in again.', 401);
+  }
+  if (!res.ok) throw await parseError(res, 'Download failed');
+  const blob = await res.blob();
+  // Try to extract filename from Content-Disposition header
+  const cd = res.headers.get('content-disposition') ?? '';
+  const match = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(cd);
+  const filename = match ? match[1].replace(/['"]/g, '') : 'download';
+  return { blob, filename };
+}
+
 // File upload — no retry
 export async function apiUploadFile<T>(
   path: string,

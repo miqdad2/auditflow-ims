@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Search, FileText, Files, Loader2, RefreshCw, ExternalLink } from 'lucide-react';
+import { Plus, Search, X, FileText, Files, Loader2, RefreshCw, ExternalLink } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { apiGet } from '@/lib/api';
@@ -36,7 +36,10 @@ export function WorkspaceDocumentsTab({ workspaceId, workspaceName, refreshKey, 
   const [showUpload, setShowUpload]     = useState(false);
   const [showBulkUpload, setShowBulkUpload] = useState(false);
 
-  const canCreate  = (user?.permissions?.includes('documents.create') ?? false) || canCollaborate;
+  // Controlled-document upload requires documents.create permission specifically.
+  // General workspace collaboration (canCollaborate) does NOT grant document upload authority —
+  // task-supporting files (uploaded via task drawer) use project.read instead.
+  const canCreate  = user?.permissions?.includes('documents.create') ?? false;
 
   const loadDocuments = useCallback(async (p = 1) => {
     if (!token) return;
@@ -66,65 +69,80 @@ export function WorkspaceDocumentsTab({ workspaceId, workspaceName, refreshKey, 
   const selectSt  = { backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-default)', color: 'var(--text-secondary)' };
 
   return (
-    <div className="flex h-full flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between px-6 py-3" style={{ borderBottom: '1px solid var(--border-default)' }}>
-        <div className="flex items-center gap-3">
+    <div className="flex h-full w-full flex-col">
+      {/* Tab header */}
+      <div className="flex items-center justify-between px-6 py-4" style={{ borderBottom: '1px solid var(--border-default)' }}>
+        <div>
+          <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Workspace Documents</h2>
+          <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
+            Manage controlled documents and official records for this workspace.
+          </p>
+        </div>
+        {canCreate && (
           <div className="flex items-center gap-2">
-            <form onSubmit={(e) => { e.preventDefault(); void loadDocuments(1); }} className="flex items-center gap-2">
-              <div className="relative">
-                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
-                <input
-                  type="text" value={search} onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search documents…"
-                  className="rounded-lg pl-8 pr-3 py-1.5 text-sm outline-none w-44"
-                  style={{ backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-default)', color: 'var(--text-primary)' }}
-                />
-              </div>
-            </form>
-            <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); void loadDocuments(1); }} className={selectCls} style={selectSt}>
-              <option value="">All Statuses</option>
-              {DOCUMENT_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-            </select>
-            {(search || statusFilter) && (
-              <button onClick={() => { setSearch(''); setStatusFilter(''); }} className="text-xs" style={{ color: 'var(--accent-primary)' }}>
-                Clear
+            <button onClick={() => setShowBulkUpload(true)}
+              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium"
+              style={{ border: '1px solid var(--accent-primary)', color: 'var(--accent-primary)' }}>
+              <Files className="h-3.5 w-3.5" />Bulk Upload
+            </button>
+            <button onClick={() => setShowUpload(true)}
+              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-white"
+              style={{ backgroundColor: 'var(--accent-primary)' }}>
+              <Plus className="h-3.5 w-3.5" />Upload Document
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-2 px-6 py-2.5"
+        style={{ borderBottom: '1px solid var(--border-default)', backgroundColor: 'var(--bg-subtle)' }}>
+        <div className="flex flex-wrap items-center gap-2">
+          <form onSubmit={(e) => { e.preventDefault(); void loadDocuments(1); }} className="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5"
+            style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-surface)' }}>
+            <Search className="h-3.5 w-3.5 flex-shrink-0" style={{ color: 'var(--text-muted)' }} />
+            <input
+              type="text" value={search} onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search documents…"
+              className="w-40 bg-transparent text-sm outline-none"
+              style={{ color: 'var(--text-primary)' }}
+            />
+            {search && (
+              <button type="button" onClick={() => setSearch('')} style={{ color: 'var(--text-muted)' }}>
+                <X className="h-3 w-3" />
               </button>
             )}
-          </div>
-          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-            {total} document{total !== 1 ? 's' : ''} in this workspace
-          </span>
+          </form>
+          <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); void loadDocuments(1); }} className={selectCls} style={selectSt}>
+            <option value="">All Statuses</option>
+            {DOCUMENT_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+          </select>
+          {(search || statusFilter) && (
+            <button type="button" onClick={() => { setSearch(''); setStatusFilter(''); }} className="text-xs font-medium" style={{ color: 'var(--accent-primary)' }}>
+              Clear
+            </button>
+          )}
+          {total > 0 && (
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              {total} document{total !== 1 ? 's' : ''}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => void loadDocuments(page)} className="rounded-lg p-1.5" style={{ border: '1px solid var(--border-default)', color: 'var(--text-muted)' }} title="Refresh">
+          <button onClick={() => void loadDocuments(page)} className="rounded-lg p-1.5" style={{ border: '1px solid var(--border-default)', color: 'var(--text-muted)', backgroundColor: 'var(--bg-surface)' }} title="Refresh">
             <RefreshCw className="h-3.5 w-3.5" />
           </button>
           <Link href={`/documents?workspaceId=${workspaceId}`}
             className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs"
-            style={{ border: '1px solid var(--border-default)', color: 'var(--text-secondary)' }}>
+            style={{ border: '1px solid var(--border-default)', color: 'var(--text-secondary)', backgroundColor: 'var(--bg-surface)' }}>
             <ExternalLink className="h-3.5 w-3.5" />All Documents
           </Link>
-          {canCreate && (
-            <>
-              <button onClick={() => setShowBulkUpload(true)}
-                className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium"
-                style={{ border: '1px solid var(--accent-primary)', color: 'var(--accent-primary)' }}>
-                <Files className="h-3.5 w-3.5" />Bulk Upload
-              </button>
-              <button onClick={() => setShowUpload(true)}
-                className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-white"
-                style={{ backgroundColor: 'var(--accent-primary)' }}>
-                <Plus className="h-3.5 w-3.5" />Upload Document
-              </button>
-            </>
-          )}
         </div>
       </div>
 
-      {/* No-duplicate guidance */}
+      {/* Guidance note */}
       <div className="px-6 py-2 text-xs" style={{ backgroundColor: 'var(--bg-subtle)', borderBottom: '1px solid var(--border-default)', color: 'var(--text-muted)' }}>
-        For official controlled documents, upload here in Documents. Use the attachment panel on tasks/pages only for supporting files.
+        For official controlled documents, upload them here. Use task attachments only for supporting files.
       </div>
 
       {/* Table */}
@@ -136,9 +154,9 @@ export function WorkspaceDocumentsTab({ workspaceId, workspaceName, refreshKey, 
         ) : documents.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-3 py-16">
             <FileText className="h-10 w-10" style={{ color: 'var(--text-disabled)' }} />
-            <p className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>No documents in this workspace</p>
+            <p className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>No controlled documents yet</p>
             <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-              {canCreate ? 'Upload the first document for this workspace.' : 'No documents have been uploaded to this workspace yet.'}
+              {canCreate ? 'Upload the first controlled document or official record.' : 'Controlled documents and official records will appear here when added.'}
             </p>
           </div>
         ) : (
