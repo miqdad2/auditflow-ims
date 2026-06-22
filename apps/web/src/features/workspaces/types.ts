@@ -20,6 +20,8 @@ export interface WorkspaceOpMetrics {
   overdueTasks: number;
   waitingReviewTasks: number;
   returnedTasks: number;
+  completedTasks: number;
+  totalTasks: number;
   documentsUnderReview: number;
   openIssues: number;
   overdueIssues: number;

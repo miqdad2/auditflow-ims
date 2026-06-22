@@ -971,10 +971,11 @@ export class WorkspacesService {
       const nonRefTasks = wsTasks.filter((t) => !t.isReference);
       const activeTasks = nonRefTasks.filter((t) => !['COMPLETED', 'CANCELLED'].includes(t.status));
 
-      const inProgressTasks = activeTasks.filter((t) => t.status === 'IN_PROGRESS').length;
-      const unassignedTasks = activeTasks.filter((t) => !t.assigneeId).length;
-      const waitingReviewTasks = activeTasks.filter((t) => t.status === 'WAITING_REVIEW').length;
-      const returnedTasks = activeTasks.filter((t) => t.status === 'REJECTED').length;
+      const inProgressTasks     = activeTasks.filter((t) => t.status === 'IN_PROGRESS').length;
+      const unassignedTasks     = activeTasks.filter((t) => !t.assigneeId).length;
+      const waitingReviewTasks  = activeTasks.filter((t) => t.status === 'WAITING_REVIEW').length;
+      const returnedTasks       = activeTasks.filter((t) => t.status === 'REJECTED').length;
+      const completedNonRefTasks = nonRefTasks.filter((t) => t.status === 'COMPLETED').length;
       const overdueCriticalHighTasks = nonRefTasks.filter((t) =>
         !['COMPLETED', 'CANCELLED'].includes(t.status) &&
         t.dueDate !== null && new Date(t.dueDate) < eod &&
@@ -1021,6 +1022,7 @@ export class WorkspacesService {
         overdueMediumLowTasks,
         waitingReviewTasks,
         returnedTasks,
+        completedTasks:             completedNonRefTasks,
         documentsUnderReview:       documentsUnderReviewMap.get(workspace.id) ?? 0,
         overdueIssues,
         openIssues,

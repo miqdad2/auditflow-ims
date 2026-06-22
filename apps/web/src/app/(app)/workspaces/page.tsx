@@ -467,6 +467,10 @@ export default function WorkspacesPage() {
             const opReasons          = ws.operationalReasons ?? [];
             const opStatus           = ws.operationalStatus;
             const openTasks          = ws.metrics?.openTasks ?? ws.summary.tasks.open;
+            const inProgressTasks    = ws.metrics?.inProgressTasks ?? 0;
+            const waitingReviewTasks = ws.metrics?.waitingReviewTasks ?? 0;
+            const completedTasks     = ws.metrics?.completedTasks ?? 0;
+            const totalTasks         = ws.metrics?.totalTasks ?? 0;
             const unassignedTasks    = ws.metrics?.unassignedTasks ?? 0;
             const overdueTasks       = ws.metrics?.overdueTasks ?? ws.summary.tasks.overdue;
             const openIssues         = ws.metrics?.openIssues ?? ws.summary.ncrCapa.open;
@@ -626,41 +630,74 @@ export default function WorkspacesPage() {
                   )}
                 </div>
 
-                {/* Metrics row — no duplicate member warning (spec Part 2) */}
-                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <div className="flex flex-wrap gap-x-3 gap-y-0.5">
-                    <span><span className="font-medium" style={{ color: 'var(--text-primary)' }}>{openTasks}</span> Open</span>
-                    <span>
-                      <span className="font-medium" style={{ color: unassignedTasks > 0 ? 'var(--state-warning)' : 'var(--text-primary)' }}>{unassignedTasks}</span>
-                      {' '}Unassigned
-                    </span>
-                    <span>
-                      <span className="font-medium" style={{ color: overdueTasks > 0 ? 'var(--state-error)' : 'var(--text-primary)' }}>{overdueTasks}</span>
-                      {' '}Overdue
-                    </span>
-                  </div>
-                  <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
-                    <div className="flex items-center gap-1">
-                      <ListTodo className="h-3 w-3" />
-                      <span>{ws._count.taskLists} List{ws._count.taskLists !== 1 ? 's' : ''}</span>
-                    </div>
-                    {filesAttention > 0 && (
-                      <span style={{ color: 'var(--state-error)' }}>
-                        {filesAttention} File{filesAttention !== 1 ? 's' : ''} Expiring
-                      </span>
-                    )}
-                    {openIssues > 0 && (
-                      <span style={{ color: 'var(--state-warning)' }}>
-                        {openIssues} Issue{openIssues !== 1 ? 's' : ''}
-                      </span>
-                    )}
-                    {operationalMembers > 0 && (
-                      <div className="flex items-center gap-1">
-                        <Users className="h-3 w-3" />
-                        <span>{operationalMembers} Member{operationalMembers !== 1 ? 's' : ''}</span>
+                {/* Task summary box */}
+                <div className="rounded-lg px-3 py-2 text-xs"
+                  style={{ backgroundColor: 'var(--bg-subtle)', border: '1px solid var(--border-subtle)' }}>
+                  {totalTasks === 0 ? (
+                    <p style={{ color: 'var(--text-disabled)' }}>No operational tasks yet</p>
+                  ) : (
+                    <div>
+                      <div className="flex flex-wrap gap-x-4 gap-y-0.5">
+                        <span>
+                          <span className="font-semibold" style={{ color: 'var(--text-primary)' }}>{totalTasks}</span>
+                          {' '}<span style={{ color: 'var(--text-muted)' }}>Total</span>
+                        </span>
+                        <span>
+                          <span className="font-semibold" style={{ color: 'var(--text-primary)' }}>{openTasks}</span>
+                          {' '}<span style={{ color: 'var(--text-muted)' }}>Open</span>
+                        </span>
+                        <span>
+                          <span className="font-semibold" style={{ color: inProgressTasks > 0 ? 'var(--accent-primary)' : 'var(--text-primary)' }}>{inProgressTasks}</span>
+                          {' '}<span style={{ color: 'var(--text-muted)' }}>In Progress</span>
+                        </span>
                       </div>
-                    )}
+                      <div className="mt-0.5 flex flex-wrap gap-x-4 gap-y-0.5">
+                        <span>
+                          <span className="font-semibold" style={{ color: waitingReviewTasks > 0 ? 'var(--state-warning)' : 'var(--text-primary)' }}>{waitingReviewTasks}</span>
+                          {' '}<span style={{ color: 'var(--text-muted)' }}>Awaiting Review</span>
+                        </span>
+                        <span>
+                          <span className="font-semibold" style={{ color: completedTasks > 0 ? 'var(--state-success)' : 'var(--text-primary)' }}>{completedTasks}</span>
+                          {' '}<span style={{ color: 'var(--text-muted)' }}>Completed</span>
+                        </span>
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 pt-1"
+                        style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                        <span>
+                          <span className="font-semibold" style={{ color: unassignedTasks > 0 ? 'var(--state-warning)' : 'var(--text-muted)' }}>{unassignedTasks}</span>
+                          {' '}<span style={{ color: 'var(--text-muted)' }}>Unassigned</span>
+                        </span>
+                        <span>
+                          <span className="font-semibold" style={{ color: overdueTasks > 0 ? 'var(--state-error)' : 'var(--text-muted)' }}>{overdueTasks}</span>
+                          {' '}<span style={{ color: 'var(--text-muted)' }}>Overdue</span>
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Context row: lists · files · issues · members */}
+                <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  <div className="flex items-center gap-1">
+                    <ListTodo className="h-3 w-3" />
+                    <span>{ws._count.taskLists} List{ws._count.taskLists !== 1 ? 's' : ''}</span>
                   </div>
+                  {filesAttention > 0 && (
+                    <span style={{ color: 'var(--state-error)' }}>
+                      {filesAttention} File{filesAttention !== 1 ? 's' : ''} Expiring
+                    </span>
+                  )}
+                  {openIssues > 0 && (
+                    <span style={{ color: 'var(--state-warning)' }}>
+                      {openIssues} Issue{openIssues !== 1 ? 's' : ''}
+                    </span>
+                  )}
+                  {operationalMembers > 0 && (
+                    <div className="flex items-center gap-1">
+                      <Users className="h-3 w-3" />
+                      <span>{operationalMembers} Member{operationalMembers !== 1 ? 's' : ''}</span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Owner + dynamic actions (spec Part 3) */}

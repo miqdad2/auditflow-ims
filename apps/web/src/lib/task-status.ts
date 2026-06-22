@@ -61,7 +61,7 @@ export const TASK_STATUS_DISPLAY_NAMES: Record<string, string> = {
  * COMPLETED, REJECTED, CANCELLED always require confirmation.
  * TODO as a target means "reopen" — also requires confirmation + reason.
  */
-export const SENSITIVE_TARGET_STATUSES = new Set(['COMPLETED', 'REJECTED', 'CANCELLED', 'TODO']);
+export const SENSITIVE_TARGET_STATUSES = new Set(['COMPLETED', 'REJECTED', 'CANCELLED', 'TODO', 'WAITING_REVIEW']);
 
 /** Status badge color tokens (mirrors status-badge.tsx) */
 export const STATUS_BADGE_COLORS: Record<string, { bg: string; color: string }> = {

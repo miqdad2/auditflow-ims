@@ -484,10 +484,11 @@ export class ReportsService {
         const wsNcrs   = ncrsByWs.get(ws.id) ?? [];
 
         const activeTasks  = wsTasks.filter((t) => !['COMPLETED', 'CANCELLED'].includes(t.status));
-        const inProgressTasks    = activeTasks.filter((t) => t.status === 'IN_PROGRESS').length;
-        const unassignedTasks    = activeTasks.filter((t) => !t.assigneeId).length;
-        const waitingReviewTasks = activeTasks.filter((t) => t.status === 'WAITING_REVIEW').length;
-        const returnedTasks      = activeTasks.filter((t) => t.status === 'REJECTED').length;
+        const inProgressTasks      = activeTasks.filter((t) => t.status === 'IN_PROGRESS').length;
+        const unassignedTasks      = activeTasks.filter((t) => !t.assigneeId).length;
+        const waitingReviewTasks   = activeTasks.filter((t) => t.status === 'WAITING_REVIEW').length;
+        const returnedTasks        = activeTasks.filter((t) => t.status === 'REJECTED').length;
+        const completedNonRefTasks = wsTasks.filter((t) => t.status === 'COMPLETED').length;
         const overdueCriticalHighTasks = wsTasks.filter((t) =>
           !['COMPLETED', 'CANCELLED'].includes(t.status) &&
           t.dueDate !== null && new Date(t.dueDate) < eod &&
@@ -521,6 +522,7 @@ export class ReportsService {
           overdueMediumLowTasks,
           waitingReviewTasks,
           returnedTasks,
+          completedTasks:             completedNonRefTasks,
           documentsUnderReview:       docsRev,
           overdueIssues,
           openIssues,

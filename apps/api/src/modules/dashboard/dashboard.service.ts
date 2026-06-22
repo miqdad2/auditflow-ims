@@ -713,6 +713,7 @@ export class DashboardService {
       const unassignedTasks        = activeTasks.filter((t) => !t.assigneeId).length;
       const waitingReviewTasks     = activeTasks.filter((t) => t.status === 'WAITING_REVIEW').length;
       const returnedTasks          = activeTasks.filter((t) => t.status === 'REJECTED').length;
+      const completedNonRefTasks   = nonRefTasks.filter((t) => t.status === 'COMPLETED').length;
       const overdueCriticalHighTasks = nonRefTasks.filter((t) =>
         !['COMPLETED', 'CANCELLED'].includes(t.status) &&
         t.dueDate !== null && new Date(t.dueDate) < eod &&
@@ -752,6 +753,7 @@ export class DashboardService {
         overdueMediumLowTasks,
         waitingReviewTasks,
         returnedTasks,
+        completedTasks:             completedNonRefTasks,
         documentsUnderReview:       docsUnderReview,
         overdueIssues,
         openIssues,

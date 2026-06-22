@@ -60,6 +60,8 @@ export interface WorkspaceMetrics {
   waitingReviewTasks: number;
   /** REJECTED tasks (non-reference) */
   returnedTasks: number;
+  /** COMPLETED tasks (non-reference) */
+  completedTasks: number;
 
   // ── Document metrics ───────────────────────────────────────────────────────
   documentsUnderReview: number;
@@ -92,6 +94,10 @@ export interface WorkspaceStatusResult {
     overdueTasks: number;
     waitingReviewTasks: number;
     returnedTasks: number;
+    /** COMPLETED non-reference tasks */
+    completedTasks: number;
+    /** openTasks + completedTasks — excludes reference and cancelled */
+    totalTasks: number;
     documentsUnderReview: number;
     openIssues: number;
     overdueIssues: number;
@@ -231,6 +237,8 @@ export function computeWorkspaceOperationalStatus(m: WorkspaceMetrics): Workspac
     overdueTasks,
     waitingReviewTasks:         m.waitingReviewTasks,
     returnedTasks:              m.returnedTasks,
+    completedTasks:             m.completedTasks,
+    totalTasks:                 m.openTasks + m.completedTasks,
     documentsUnderReview:       m.documentsUnderReview,
     openIssues:                 m.openIssues,
     overdueIssues:              m.overdueIssues,

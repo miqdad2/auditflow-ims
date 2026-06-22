@@ -15,6 +15,7 @@ function activeWorkspace(overrides: Partial<WorkspaceMetrics> = {}): WorkspaceMe
     overdueMediumLowTasks:      0,
     waitingReviewTasks:         0,
     returnedTasks:              0,
+    completedTasks:             0,
     documentsUnderReview:       0,
     overdueIssues:              0,
     openIssues:                 0,
@@ -381,5 +382,46 @@ describe('Unit 59.2 — relationship separation contracts', () => {
     const r = computeWorkspaceOperationalStatus(activeWorkspace());
     expect(r.status).toBe('HEALTHY');
     expect(r.reasons).toHaveLength(0);
+  });
+});
+
+// ── 13. Unit 62.2 — Task summary metrics (completedTasks, totalTasks) ────────
+
+describe('Unit 62.2 — task summary metrics', () => {
+  it('62.2-T1: completedTasks is passed through from input', () => {
+    const r = computeWorkspaceOperationalStatus(activeWorkspace({ completedTasks: 5 }));
+    expect(r.metrics.completedTasks).toBe(5);
+  });
+
+  it('62.2-T2: totalTasks = openTasks + completedTasks', () => {
+    const r = computeWorkspaceOperationalStatus(activeWorkspace({ openTasks: 3, completedTasks: 2 }));
+    expect(r.metrics.totalTasks).toBe(5);
+  });
+
+  it('62.2-T3: totalTasks is 0 when workspace has no tasks', () => {
+    const r = computeWorkspaceOperationalStatus(activeWorkspace({ openTasks: 0, completedTasks: 0 }));
+    expect(r.metrics.totalTasks).toBe(0);
+  });
+
+  it('62.2-T4: completedTasks does not affect operational status (HEALTHY when only completed work)', () => {
+    const r = computeWorkspaceOperationalStatus(activeWorkspace({ completedTasks: 100 }));
+    expect(r.status).toBe('HEALTHY');
+  });
+
+  it('62.2-T5: completedTasks excluded from openTasks — both preserved as separate counts', () => {
+    const r = computeWorkspaceOperationalStatus(activeWorkspace({ openTasks: 3, completedTasks: 5 }));
+    expect(r.metrics.openTasks).toBe(3);
+    expect(r.metrics.completedTasks).toBe(5);
+    expect(r.metrics.totalTasks).toBe(8);
+  });
+
+  it('62.2-T6: totalTasks correct when completedTasks is 0', () => {
+    const r = computeWorkspaceOperationalStatus(activeWorkspace({ openTasks: 4, completedTasks: 0 }));
+    expect(r.metrics.totalTasks).toBe(4);
+  });
+
+  it('62.2-T7: totalTasks correct when openTasks is 0 but completedTasks > 0', () => {
+    const r = computeWorkspaceOperationalStatus(activeWorkspace({ openTasks: 0, completedTasks: 3 }));
+    expect(r.metrics.totalTasks).toBe(3);
   });
 });
