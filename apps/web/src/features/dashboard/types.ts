@@ -124,6 +124,7 @@ export interface WorkspaceStatusRow {
   unassignedTasks: number;
   overdueTasks: number;
   waitingReviewTasks: number;
+  pendingApprovalTasks: number;
   docsUnderReview: number;
   openIssues: number;
   overdueIssues: number;

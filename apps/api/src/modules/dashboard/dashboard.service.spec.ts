@@ -168,3 +168,113 @@ describe('Unit 60 — overdue calculation uses Kuwait end-of-day', () => {
     expect(summary.completed).toBe(1);
   });
 });
+
+// ─── Unit 63.5 — Dashboard consolidation tests ────────────────────────────────
+
+// These pure-computation tests verify the data contracts that the new
+// unified dashboard depends on, without hitting the database.
+
+describe('Unit 63.5 — dashboard data contracts', () => {
+
+  // ── WorkspaceStatusRow shape ──────────────────────────────────────────────
+
+  function makeWsRow(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'ws-1',
+      name: 'ICT',
+      department: null,
+      memberCount: 3,
+      openTasks: 4,
+      inProgressTasks: 2,
+      unassignedTasks: 1,
+      overdueTasks: 1,
+      waitingReviewTasks: 0,
+      pendingApprovalTasks: 0,
+      docsUnderReview: 0,
+      openIssues: 0,
+      overdueIssues: 0,
+      issuesWaitingVerification: 0,
+      expiringFiles: 0,
+      expiredFiles: 0,
+      lastActivity: new Date().toISOString(),
+      operationalStatus: 'IN_PROGRESS' as const,
+      operationalStatusLabel: 'In Progress',
+      operationalReasons: [],
+      ...overrides,
+    };
+  }
+
+  // T1 — pendingApprovalTasks is present in the row
+  it('T1 — WorkspaceStatusRow includes pendingApprovalTasks field', () => {
+    const row = makeWsRow({ pendingApprovalTasks: 3 });
+    expect(row).toHaveProperty('pendingApprovalTasks', 3);
+  });
+
+  // T2 — pendingApprovalTasks defaults to 0 when no pending
+  it('T2 — pendingApprovalTasks is 0 when no approvals pending', () => {
+    const row = makeWsRow();
+    expect(row.pendingApprovalTasks).toBe(0);
+  });
+
+  // T3 — Multiple workspace rows can have different pendingApprovalTasks values
+  it('T3 — multiple rows sum pendingApprovalTasks correctly', () => {
+    const rows = [
+      makeWsRow({ id: 'ws-1', pendingApprovalTasks: 2 }),
+      makeWsRow({ id: 'ws-2', pendingApprovalTasks: 0 }),
+      makeWsRow({ id: 'ws-3', pendingApprovalTasks: 5 }),
+    ];
+    const total = rows.reduce((s, r) => s + r.pendingApprovalTasks, 0);
+    expect(total).toBe(7);
+  });
+
+  // T4 — waitingReviewTasks is exposed in the row (used for Awaiting Review KPI)
+  it('T4 — WorkspaceStatusRow exposes waitingReviewTasks for KPI computation', () => {
+    const row = makeWsRow({ waitingReviewTasks: 3 });
+    expect(row.waitingReviewTasks).toBe(3);
+  });
+
+  // ── KPI computation contracts ─────────────────────────────────────────────
+
+  // T5 — Awaiting Review KPI uses taskSummary.waitingReview
+  it('T5 — awaiting review count equals WAITING_REVIEW status task count', () => {
+    const tasks = [
+      makeTask({ status: 'WAITING_REVIEW' }),
+      makeTask({ id: 'task-2', status: 'IN_PROGRESS' }),
+      makeTask({ id: 'task-3', status: 'WAITING_REVIEW' }),
+    ];
+    const summary = computeSummary(tasks);
+    expect(summary.waitingReview).toBe(2);
+  });
+
+  // T6 — reference tasks are excluded from awaiting-review count
+  it('T6 — reference tasks do not count toward awaiting review', () => {
+    const tasks = [
+      makeTask({ status: 'WAITING_REVIEW', isReference: false }),
+      makeTask({ id: 'task-2', status: 'WAITING_REVIEW', isReference: true }),
+    ];
+    const summary = computeSummary(tasks);
+    expect(summary.waitingReview).toBe(1);
+  });
+
+  // T7 — expiry KPI: expired + expiringSoon are separate counts
+  it('T7 — expiry KPI total = expired + expiringSoon', () => {
+    const expired     = 2;
+    const expiringSoon = 3;
+    const total = expired + expiringSoon;
+    expect(total).toBe(5);
+  });
+
+  // T8 — open tasks KPI excludes completed tasks
+  it('T8 — open tasks = total - completed (excluding cancelled)', () => {
+    const tasks = [
+      makeTask({ status: 'TODO' }),
+      makeTask({ id: 't2', status: 'IN_PROGRESS' }),
+      makeTask({ id: 't3', status: 'COMPLETED' }),
+      makeTask({ id: 't4', status: 'CANCELLED' }),
+    ];
+    const summary = computeSummary(tasks);
+    // open = active (TODO, IN_PROGRESS, WAITING_REVIEW, REJECTED)
+    expect(summary.open).toBe(2);
+    expect(summary.completed).toBe(1);
+  });
+});

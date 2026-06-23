@@ -21,6 +21,7 @@ export interface WorkspaceStatusRow {
   unassignedTasks: number;
   overdueTasks: number;
   waitingReviewTasks: number;
+  pendingApprovalTasks: number;
   docsUnderReview: number;
   openIssues: number;
   overdueIssues: number;
@@ -52,24 +53,27 @@ export class DashboardService {
 
     // ─── Where clauses scoped by access tier ──────────────────────────────────
     // isReference: false — exclude reference-only items from all operational task KPIs
-    const taskWhere = { ...this.buildTaskWhere(tier, actorId, actorDeptId), isReference: false };
+    // approvalStatus: 'APPROVED' — exclude MEMBER pending tasks from all KPIs (Unit 63.1)
+    const taskWhere = { ...this.buildTaskWhere(tier, actorId, actorDeptId), isReference: false, approvalStatus: 'APPROVED' };
     const docWhere      = this.buildDocWhere(tier, actorId, actorDeptId);
     const ncrWhere      = this.buildNcrWhere(tier, actorId, actorDeptId);
     const checklistWhere = this.buildChecklistWhere(tier, actorId, actorDeptId);
 
     const overdueTaskWhere = {
       ...taskWhere,
-      parentTaskId: null as null | undefined,
-      isReference:  false,   // Reference items are not operational — exclude from overdue KPI
+      parentTaskId:   null as null | undefined,
+      isReference:    false,
+      approvalStatus: 'APPROVED', // Unit 63.1 — pending tasks not operational
       dueDate: { lt: now },
       status: { notIn: ['COMPLETED', 'CANCELLED'] },
     };
 
     // My personal task assignments, workspace-access-scoped
     const myAssignmentWhere = {
-      assigneeId:   actorId,
-      parentTaskId: null as null | undefined,
-      isReference:  false,   // Reference items do not appear in the personal work queue
+      assigneeId:     actorId,
+      parentTaskId:   null as null | undefined,
+      isReference:    false,
+      approvalStatus: 'APPROVED', // Unit 63.1 — pending tasks not in work queue (creator sees them, not other members)
       status: { notIn: ['COMPLETED', 'CANCELLED'] },
       ...(tier !== 'ELEVATED' ? this.taskWsVis(tier, actorId, actorDeptId) : {}),
     };
@@ -469,8 +473,9 @@ export class DashboardService {
 
     const tasks = await this.prisma.task.findMany({
       where: {
-        assigneeId:   actorId,
-        parentTaskId: null,
+        assigneeId:     actorId,
+        parentTaskId:   null,
+        approvalStatus: 'APPROVED', // Unit 63.1: pending tasks excluded from My Tasks queue
         ...wsVis,
       },
       orderBy: [{ updatedAt: 'desc' }],
@@ -623,11 +628,9 @@ export class DashboardService {
           isReference: true,
           assigneeId: true,
           dueDate: true,
+          approvalStatus: true, // Unit 63.1 — needed to exclude PENDING from operational counts
         },
-      }).then((rows) => rows.filter((t) => {
-        // Filter to only workspaces we care about (loaded above) — post-fetch, no N+1
-        return true; // keep all; we will filter by workspaceId when we have the IDs
-      })),
+      }).then((rows) => rows.filter((_t) => true)), // workspace filtering done below
       this.prisma.document.groupBy({
         by: ['workspaceId'],
         where: { status: 'UNDER_REVIEW', workspaceId: { not: null } },
@@ -706,7 +709,9 @@ export class DashboardService {
       const wsFiles   = filesByWs.get(ws.id) ?? [];
       const wsNcrs    = ncrByWs.get(ws.id) ?? [];
 
-      const nonRefTasks   = wsTasks.filter((t) => !t.isReference);
+      // Unit 63.1: only APPROVED tasks enter operational counts
+      const pendingApprovalTasks = wsTasks.filter((t) => t.approvalStatus === 'PENDING').length;
+      const nonRefTasks   = wsTasks.filter((t) => !t.isReference && t.approvalStatus === 'APPROVED');
       const activeTasks   = nonRefTasks.filter((t) => !['COMPLETED', 'CANCELLED'].includes(t.status));
 
       const inProgressTasks        = activeTasks.filter((t) => t.status === 'IN_PROGRESS').length;
@@ -760,6 +765,7 @@ export class DashboardService {
         issuesWaitingVerification,
         expiredFiles,
         expiringFiles,
+        pendingApprovalTasks,
       });
 
       return {
@@ -772,6 +778,7 @@ export class DashboardService {
         unassignedTasks:           opResult.metrics.unassignedTasks,
         overdueTasks:              opResult.metrics.overdueTasks,
         waitingReviewTasks:        opResult.metrics.waitingReviewTasks,
+        pendingApprovalTasks,
         docsUnderReview,
         openIssues:                opResult.metrics.openIssues,
         overdueIssues:             opResult.metrics.overdueIssues,
