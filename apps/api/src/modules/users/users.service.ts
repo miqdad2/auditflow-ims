@@ -8,8 +8,28 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { SetUserStatusDto } from './dto/set-user-status.dto';
 
-// Roles that only SUPER_ADMIN / IT_ADMIN can assign — SUPER_USER cannot assign these
+// Technical/system accounts that only SUPER_ADMIN can manage.
+// SUPER_USER is restricted to business users only and cannot see or touch these.
 const PRIVILEGED_ROLES = ['SUPER_ADMIN', 'IT_ADMIN', 'SUPER_USER'];
+
+// Whether actor is a plain Super User (not Super Admin or IT Admin)
+export function isSuperUserOnly(actorRoles: string[]): boolean {
+  return (
+    actorRoles.includes('SUPER_USER') &&
+    !actorRoles.includes('SUPER_ADMIN') &&
+    !actorRoles.includes('IT_ADMIN')
+  );
+}
+
+// Prisma where fragment that restricts to non-privileged accounts.
+// Used when actor is SUPER_USER.
+export function buildManageableUserWhere() {
+  return {
+    userRoles: {
+      none: { role: { name: { in: PRIVILEGED_ROLES } } },
+    },
+  };
+}
 
 const USER_SELECT = {
   id: true,
@@ -36,12 +56,10 @@ export class UsersService {
     private auditLog: AuditLogService,
   ) {}
 
-  async findAll(query: {
-    search?: string;
-    departmentId?: string;
-    roleId?: string;
-    isActive?: string;
-  }) {
+  async findAll(
+    query: { search?: string; departmentId?: string; roleId?: string; isActive?: string },
+    actorRoles: string[] = [],
+  ) {
     const where: Record<string, unknown> = {};
 
     if (query.isActive !== undefined) {
@@ -64,6 +82,11 @@ export class UsersService {
       where.userRoles = { some: { roleId: query.roleId } };
     }
 
+    // SUPER_USER scope: exclude privileged/technical accounts
+    if (isSuperUserOnly(actorRoles)) {
+      Object.assign(where, buildManageableUserWhere());
+    }
+
     return this.prisma.user.findMany({
       where,
       orderBy: { fullName: 'asc' },
@@ -71,13 +94,35 @@ export class UsersService {
     });
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, actorRoles: string[] = []) {
     const user = await this.prisma.user.findUnique({
       where: { id },
       select: USER_SELECT,
     });
     if (!user) throw new NotFoundException('User not found');
+    // SUPER_USER cannot view protected technical accounts
+    if (isSuperUserOnly(actorRoles) && this.isProtectedUser(user.userRoles)) {
+      throw new NotFoundException('User not found');
+    }
     return user;
+  }
+
+  // Returns true if the user holds any privileged role
+  private isProtectedUser(userRoles: Array<{ role: { name: string } }>): boolean {
+    return userRoles.some((ur) => PRIVILEGED_ROLES.includes(ur.role.name));
+  }
+
+  // Throws ForbiddenException if actor (SUPER_USER) tries to target a protected account
+  private async assertCanTargetUser(targetId: string, actorRoles: string[]): Promise<void> {
+    if (!isSuperUserOnly(actorRoles)) return;
+    const target = await this.prisma.user.findUnique({
+      where: { id: targetId },
+      select: { userRoles: { select: { role: { select: { name: true } } } } },
+    });
+    if (!target) return; // will 404 elsewhere
+    if (this.isProtectedUser(target.userRoles)) {
+      throw new ForbiddenException('Super User cannot manage privileged accounts');
+    }
   }
 
   private async assertRoleAssignmentAllowed(roleIds: string[] | undefined, actorRoles: string[]) {
@@ -142,6 +187,7 @@ export class UsersService {
   }
 
   async update(id: string, dto: UpdateUserDto, actorId: string, actorRoles: string[] = []) {
+    await this.assertCanTargetUser(id, actorRoles);
     await this.assertRoleAssignmentAllowed(dto.roleIds, actorRoles);
     const existing = await this.prisma.user.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('User not found');
@@ -176,6 +222,9 @@ export class UsersService {
   }
 
   async setStatus(id: string, dto: SetUserStatusDto, actorId: string, actorRoles: string[] = []) {
+    // SUPER_USER scope: block all privileged accounts (SUPER_ADMIN, IT_ADMIN, SUPER_USER)
+    await this.assertCanTargetUser(id, actorRoles);
+
     const existing = await this.prisma.user.findUnique({
       where: { id },
       include: { userRoles: { include: { role: { select: { name: true } } } } },
@@ -186,13 +235,13 @@ export class UsersService {
       throw new BadRequestException('Cannot change your own active status');
     }
 
-    // SUPER_USER cannot deactivate SUPER_ADMIN or IT_ADMIN accounts
-    const isSuperAdmin = actorRoles.includes('SUPER_ADMIN');
-    const isItAdmin    = actorRoles.includes('IT_ADMIN');
-    if (!isSuperAdmin && !isItAdmin) {
+    // SUPER_ADMIN / IT_ADMIN: no restriction on status changes
+    // Everyone else (including SUPER_USER after the scope check above): block privileged accounts
+    const isFullAdmin = actorRoles.includes('SUPER_ADMIN') || actorRoles.includes('IT_ADMIN');
+    if (!isFullAdmin) {
       const targetRoles = existing.userRoles.map((ur) => ur.role.name);
-      if (targetRoles.some((r) => ['SUPER_ADMIN', 'IT_ADMIN'].includes(r))) {
-        throw new ForbiddenException('Cannot change the status of Super Admin or IT Admin accounts');
+      if (targetRoles.some((r) => PRIVILEGED_ROLES.includes(r))) {
+        throw new ForbiddenException('Cannot change the status of privileged accounts');
       }
     }
 
@@ -213,7 +262,8 @@ export class UsersService {
     return this.findOne(id);
   }
 
-  async resetPassword(id: string, actorId: string): Promise<{ temporaryPassword: string }> {
+  async resetPassword(id: string, actorId: string, actorRoles: string[] = []): Promise<{ temporaryPassword: string }> {
+    await this.assertCanTargetUser(id, actorRoles);
     const existing = await this.prisma.user.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('User not found');
 
@@ -257,7 +307,8 @@ export class UsersService {
     return { updated };
   }
 
-  async getUserWorkspaces(userId: string) {
+  async getUserWorkspaces(userId: string, actorRoles: string[] = []) {
+    await this.assertCanTargetUser(userId, actorRoles);
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
     if (!user) throw new NotFoundException('User not found');
 

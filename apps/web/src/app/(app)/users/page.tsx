@@ -173,11 +173,14 @@ export default function UsersPage() {
   const canManage = user?.permissions?.includes('users.manage') ?? false;
   const actorRoles = user?.roles ?? [];
   const actorIsSuperAdmin = actorRoles.includes('SUPER_ADMIN');
+  // Plain Super User: has SUPER_USER role but is not Super Admin or IT Admin
+  const actorIsSuperUserOnly = actorRoles.includes('SUPER_USER') && !actorIsSuperAdmin && !actorRoles.includes('IT_ADMIN');
 
   // What system access options can this actor grant?
   const allowedAccessOptions = [
     { value: 'NORMAL_USER', label: 'Normal User' },
-    { value: 'SUPER_USER',  label: 'Super User' },
+    // SUPER_USER actors cannot create or promote to Super User — backend blocks it too
+    ...(!actorIsSuperUserOnly ? [{ value: 'SUPER_USER', label: 'Super User' }] : []),
     ...(actorIsSuperAdmin ? [{ value: 'SUPER_ADMIN', label: 'Super Admin' }] : []),
   ];
 
@@ -518,7 +521,7 @@ export default function UsersPage() {
           style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }}>
           <option value="">All Access Levels</option>
           <option value="NORMAL_USER">Normal User</option>
-          <option value="SUPER_USER">Super User</option>
+          {!actorIsSuperUserOnly && <option value="SUPER_USER">Super User</option>}
           {actorIsSuperAdmin && <option value="SUPER_ADMIN">Super Admin</option>}
         </select>
         <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}

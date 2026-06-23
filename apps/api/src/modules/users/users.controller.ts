@@ -23,8 +23,9 @@ export class UsersController {
     @Query('departmentId') departmentId?: string,
     @Query('roleId') roleId?: string,
     @Query('isActive') isActive?: string,
+    @CurrentUser() user?: Record<string, unknown>,
   ) {
-    return this.svc.findAll({ search, departmentId, roleId, isActive });
+    return this.svc.findAll({ search, departmentId, roleId, isActive }, extractUserRoles(user ?? {}));
   }
 
   // Lightweight user list for dropdowns (assignee pickers, member selectors, etc.)
@@ -37,14 +38,20 @@ export class UsersController {
 
   @Get(':id')
   @RequirePermissions('users.manage')
-  findOne(@Param('id') id: string) {
-    return this.svc.findOne(id);
+  findOne(
+    @Param('id') id: string,
+    @CurrentUser() user: Record<string, unknown>,
+  ) {
+    return this.svc.findOne(id, extractUserRoles(user));
   }
 
   @Get(':id/workspaces')
   @RequirePermissions('users.manage')
-  getUserWorkspaces(@Param('id') id: string) {
-    return this.svc.getUserWorkspaces(id);
+  getUserWorkspaces(
+    @Param('id') id: string,
+    @CurrentUser() user: Record<string, unknown>,
+  ) {
+    return this.svc.getUserWorkspaces(id, extractUserRoles(user));
   }
 
   @Post()
@@ -88,6 +95,6 @@ export class UsersController {
     @Param('id') id: string,
     @CurrentUser() user: Record<string, unknown>,
   ) {
-    return this.svc.resetPassword(id, user.id as string);
+    return this.svc.resetPassword(id, user.id as string, extractUserRoles(user));
   }
 }
