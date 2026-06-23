@@ -7,6 +7,7 @@ import {
   Activity, LayoutDashboard, ChevronDown, ChevronUp, Search, Lock, Globe, Building2,
   AlertTriangle, AlertCircle, CheckCircle2, Clock, FileCheck, RefreshCw,
   ShieldAlert, Wifi, WifiOff, UserCircle, TrendingUp, Pencil, Settings,
+  MessageSquare, GitBranch,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -132,6 +133,28 @@ function formatKuwaitTooltip(iso: string | null | undefined): string {
   } catch { return iso; }
 }
 
+/** Kuwait date: "23 Jun 2026" */
+function formatKuwaitDate(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleDateString('en-GB', {
+      timeZone: 'Asia/Kuwait',
+      day: '2-digit', month: 'short', year: 'numeric',
+    });
+  } catch { return iso; }
+}
+
+/** Kuwait time: "12:42 PM" */
+function formatKuwaitTime(iso: string | null | undefined): string {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toLocaleTimeString('en-US', {
+      timeZone: 'Asia/Kuwait',
+      hour: '2-digit', minute: '2-digit', hour12: true,
+    });
+  } catch { return ''; }
+}
+
 type TaskSort = 'manual' | 'newest-created' | 'oldest-created' | 'recently-updated' | 'oldest-updated';
 
 export interface WorkspaceClientProps { params: Promise<{ id: string }>; }
@@ -234,6 +257,16 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
   // Debounced workspace refresh — keeps workspace.metrics and header chips fresh
   const wsRefreshDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Inline assignee dropdown (lazy-loaded eligible users, one fetch per workspace)
+  interface EligibleUser { id: string; fullName: string; email: string; department: { id: string; name: string } | null; roleInWorkspace: string; }
+  const [eligibleUsers, setEligibleUsers]       = useState<EligibleUser[]>([]);
+  const [eligibleUsersLoading, setEligibleUsersLoading] = useState(false);
+  const [eligibleUsersError, setEligibleUsersError]     = useState('');
+  const [openAssigneeDropdownId, setOpenAssigneeDropdownId] = useState<string | null>(null);
+  const [assigneeUpdating, setAssigneeUpdating] = useState<Set<string>>(new Set());
+  const [assigneeSearch, setAssigneeSearch]     = useState('');
+  const assigneeDropdownRef = useRef<HTMLDivElement | null>(null);
+
   // Local task list order (overrides workspace.taskLists for display after reorder)
   const [localListOrder, setLocalListOrder] = useState<string[] | null>(null);
   const [listReorderSaving, setListReorderSaving] = useState(false);
@@ -250,6 +283,8 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
   const canManage        = (user?.permissions?.includes('project.create') ?? false) || canCollaborate;
   const canManageMembers = (user?.permissions?.includes('project.update') ?? false) || canManageWs;
   const canDeleteTask    = user?.permissions?.includes('tasks.delete') ?? false;
+  // Inline assignee control: Super User/Admin or workspace Manager/Owner
+  const canAssignTasks   = canManageWs || isElevatedAccess;
 
   // Fine-grained action permissions — used to show/hide UI controls accurately (Part 15-17, 19)
   // canCreateOfficialTask: elevated/manager path — task goes live immediately with full options
@@ -309,6 +344,18 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
     document.addEventListener('mousedown', h);
     return () => document.removeEventListener('mousedown', h);
   }, [showWsSettings]);
+
+  useEffect(() => {
+    if (!openAssigneeDropdownId) return;
+    const h = (e: MouseEvent) => {
+      if (assigneeDropdownRef.current && !assigneeDropdownRef.current.contains(e.target as Node)) {
+        setOpenAssigneeDropdownId(null);
+        setAssigneeSearch('');
+      }
+    };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [openAssigneeDropdownId]);
 
   // ── Loaders ──────────────────────────────────────────────────────────────────
 
@@ -648,6 +695,53 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
     void navigator.clipboard.writeText(`${window.location.origin}/workspaces/${workspaceId}?task=${taskId}`);
     showToast('Link copied to clipboard');
     setOpenMenuId(null);
+  }
+
+  async function loadEligibleUsers() {
+    if (!token || eligibleUsers.length > 0 || eligibleUsersLoading) return;
+    setEligibleUsersLoading(true);
+    setEligibleUsersError('');
+    try {
+      const data = await apiGet<Array<{ id: string; fullName: string; email: string; department: { id: string; name: string } | null; roleInWorkspace: string }>>(`/workspaces/${workspaceId}/members/eligible`, token);
+      setEligibleUsers(data);
+    } catch {
+      setEligibleUsersError('Unable to load eligible users. Retry.');
+    } finally {
+      setEligibleUsersLoading(false);
+    }
+  }
+
+  async function handleInlineAssign(taskId: string, newAssigneeId: string | null) {
+    if (!token || assigneeUpdating.has(taskId)) return;
+    // Confirm unassign for in-progress/waiting-review tasks
+    if (newAssigneeId === null) {
+      const t = tasks.find((t) => t.id === taskId);
+      if (t && ['IN_PROGRESS', 'WAITING_REVIEW'].includes(t.status)) {
+        if (!confirm('Unassign this task?\n\nThe task will remain open and appear in the Unassigned queue.')) return;
+      }
+    }
+    setAssigneeUpdating((prev) => new Set([...prev, taskId]));
+    setOpenAssigneeDropdownId(null);
+    setAssigneeSearch('');
+    try {
+      const updated = await apiPatchAuth<TaskSummary>(`/tasks/${taskId}`, { assigneeId: newAssigneeId }, token);
+      setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, ...updated } : t)));
+      debouncedRefreshWorkspace();
+      if (newAssigneeId === null) {
+        showToast('Task unassigned.');
+      } else {
+        const eu = eligibleUsers.find((u) => u.id === newAssigneeId);
+        showToast(`Task assigned to ${eu?.fullName ?? 'user'}.`);
+      }
+    } catch (err) {
+      if (err instanceof ApiError && err.statusCode === 409) {
+        showToast('This task was updated by another user. Refresh before assigning.');
+      } else {
+        showToast(err instanceof Error ? err.message : 'The task could not be assigned. No changes were saved.');
+      }
+    } finally {
+      setAssigneeUpdating((prev) => { const next = new Set(prev); next.delete(taskId); return next; });
+    }
   }
 
   async function handleAddMember(e: React.FormEvent) {
@@ -2396,11 +2490,20 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                     <table className="w-full border-collapse">
                       <thead>
                         <tr style={{ borderBottom: '1px solid var(--border-default)' }}>
-                          {['Title', 'Status', 'Priority', 'Assignee', 'Due Date', 'Created', 'Updated', 'Sub', 'Cmts', ''].map((h) => (
-                            <th key={h}
-                              className={`px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide${h === 'Created' ? ' hidden lg:table-cell' : ''}`}
+                          {[
+                            { label: 'Title',    cls: '' },
+                            { label: 'Status',   cls: '' },
+                            { label: 'Priority', cls: '' },
+                            { label: 'Assignee', cls: '' },
+                            { label: 'Due Date', cls: '' },
+                            { label: 'Created',  cls: ' hidden lg:table-cell' },
+                            { label: 'Updated',  cls: '' },
+                            { label: '',         cls: '' },
+                          ].map(({ label, cls }) => (
+                            <th key={label}
+                              className={`px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide${cls}`}
                               style={{ color: 'var(--text-muted)', backgroundColor: 'var(--bg-subtle)' }}>
-                              {h}
+                              {label}
                             </th>
                           ))}
                         </tr>
@@ -2445,6 +2548,21 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                                 {task.recurrenceInterval && task.recurrenceInterval !== 'NONE' && (
                                   <span className="shrink-0 text-[10px]" style={{ color: 'var(--text-disabled)' }} title={`Recurring: ${task.recurrenceInterval}`}>↻</span>
                                 )}
+                                {/* Compact count indicators — only when > 0 (Part 16) */}
+                                {(task._count.comments > 0 || task._count.subtasks > 0) && (
+                                  <span className="inline-flex shrink-0 items-center gap-1.5 text-[10px]" style={{ color: 'var(--text-disabled)' }}>
+                                    {task._count.comments > 0 && (
+                                      <span className="inline-flex items-center gap-0.5" title={`${task._count.comments} comment${task._count.comments !== 1 ? 's' : ''}`}>
+                                        <MessageSquare className="h-2.5 w-2.5" />{task._count.comments}
+                                      </span>
+                                    )}
+                                    {task._count.subtasks > 0 && (
+                                      <span className="inline-flex items-center gap-0.5" title={`${task._count.subtasks} subtask${task._count.subtasks !== 1 ? 's' : ''}`}>
+                                        <GitBranch className="h-2.5 w-2.5" />{task._count.subtasks}
+                                      </span>
+                                    )}
+                                  </span>
+                                )}
                               </div>
                             </td>
                             <td className="px-4 py-3"><StatusBadge status={task.status} size="xs" /></td>
@@ -2454,17 +2572,153 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                                 : <PriorityBadge priority={task.priority} />
                               }
                             </td>
-                            <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-secondary)' }}>
-                              {task.assignee ? (
-                                <div className="flex items-center gap-1.5">
-                                  <div className="flex h-5 w-5 items-center justify-center rounded-full text-[9px] font-bold text-white"
-                                    style={{ backgroundColor: 'var(--sidebar-bg)' }}>
-                                    {task.assignee.fullName.charAt(0).toUpperCase()}
-                                  </div>
-                                  <span className="truncate" style={{ maxWidth: '90px' }}>{task.assignee.fullName}</span>
+
+                            {/* ── Assignee cell — interactive for canAssignTasks, read-only otherwise ── */}
+                            <td className="px-4 py-3 text-xs" onClick={(e) => e.stopPropagation()}>
+                              {canAssignTasks && task.status !== 'COMPLETED' && task.status !== 'CANCELLED' ? (
+                                <div className="relative" ref={openAssigneeDropdownId === task.id ? assigneeDropdownRef : null}>
+                                  {/* Loading spinner while updating */}
+                                  {assigneeUpdating.has(task.id) ? (
+                                    <div className="flex items-center gap-1.5">
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin" style={{ color: 'var(--accent-primary)' }} />
+                                    </div>
+                                  ) : task.approvalStatus === 'PENDING' ? (
+                                    /* Pending-approval: assignee locked until approved */
+                                    <div className="flex cursor-not-allowed items-center gap-1.5 opacity-50"
+                                      title="Assignment can be changed after task approval.">
+                                      {task.assignee ? (
+                                        <>
+                                          <div className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white"
+                                            style={{ backgroundColor: 'var(--sidebar-bg)' }}>
+                                            {task.assignee.fullName.charAt(0).toUpperCase()}
+                                          </div>
+                                          <span className="truncate" style={{ maxWidth: '80px', color: 'var(--text-secondary)' }}>{task.assignee.fullName}</span>
+                                        </>
+                                      ) : <span style={{ color: 'var(--text-disabled)' }}>—</span>}
+                                    </div>
+                                  ) : (
+                                    /* Interactive dropdown trigger */
+                                    <button type="button"
+                                      onClick={() => {
+                                        if (openAssigneeDropdownId === task.id) {
+                                          setOpenAssigneeDropdownId(null);
+                                          setAssigneeSearch('');
+                                        } else {
+                                          setOpenAssigneeDropdownId(task.id);
+                                          setAssigneeSearch('');
+                                          void loadEligibleUsers();
+                                        }
+                                      }}
+                                      className="flex items-center gap-1.5 rounded px-1 py-0.5 -mx-1 transition-colors hover:bg-[var(--bg-muted)] focus:outline-none"
+                                      style={{ color: task.assignee ? 'var(--text-secondary)' : 'var(--accent-primary)' }}
+                                      aria-haspopup="listbox"
+                                      aria-expanded={openAssigneeDropdownId === task.id}
+                                      aria-label={task.assignee ? `Assigned to ${task.assignee.fullName} — click to change` : 'Unassigned — click to assign'}>
+                                      {task.assignee ? (
+                                        <>
+                                          <div className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white"
+                                            style={{ backgroundColor: 'var(--sidebar-bg)' }}>
+                                            {task.assignee.fullName.charAt(0).toUpperCase()}
+                                          </div>
+                                          <span className="truncate" style={{ maxWidth: '80px' }}>{task.assignee.fullName}</span>
+                                          <ChevronDown className="h-3 w-3 flex-shrink-0 opacity-40" />
+                                        </>
+                                      ) : (
+                                        <span className="inline-flex items-center gap-1 text-xs font-medium">
+                                          <Plus className="h-3 w-3" />Assign
+                                        </span>
+                                      )}
+                                    </button>
+                                  )}
+
+                                  {/* Assignee dropdown */}
+                                  {openAssigneeDropdownId === task.id && (
+                                    <div className="absolute left-0 top-full z-30 mt-1 w-56 overflow-hidden rounded-xl shadow-lg"
+                                      style={{ backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-default)' }}
+                                      role="listbox" aria-label="Select assignee">
+                                      {/* Search */}
+                                      <div className="border-b px-3 py-2" style={{ borderColor: 'var(--border-default)' }}>
+                                        <div className="flex items-center gap-1.5 rounded-lg border px-2 py-1"
+                                          style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)' }}>
+                                          <Search className="h-3 w-3 flex-shrink-0" style={{ color: 'var(--text-muted)' }} />
+                                          <input type="text" placeholder="Search eligible users…" value={assigneeSearch}
+                                            onChange={(e) => setAssigneeSearch(e.target.value)}
+                                            className="flex-1 bg-transparent text-xs outline-none"
+                                            style={{ color: 'var(--text-primary)' }}
+                                            autoFocus
+                                            aria-label="Search eligible users" />
+                                        </div>
+                                      </div>
+                                      {/* User list */}
+                                      <div className="max-h-48 overflow-y-auto py-1">
+                                        {eligibleUsersLoading ? (
+                                          <div className="flex items-center justify-center py-4">
+                                            <Loader2 className="h-4 w-4 animate-spin" style={{ color: 'var(--accent-primary)' }} />
+                                          </div>
+                                        ) : eligibleUsersError ? (
+                                          <div className="px-3 py-2 text-xs" style={{ color: 'var(--state-error)' }}>
+                                            {eligibleUsersError}
+                                            <button type="button" onClick={() => { setEligibleUsersError(''); void loadEligibleUsers(); }}
+                                              className="ml-2 underline" style={{ color: 'var(--accent-primary)' }}>Retry</button>
+                                          </div>
+                                        ) : (() => {
+                                          const filtered = eligibleUsers.filter((u) =>
+                                            !assigneeSearch.trim() ||
+                                            u.fullName.toLowerCase().includes(assigneeSearch.toLowerCase()) ||
+                                            u.email.toLowerCase().includes(assigneeSearch.toLowerCase()));
+                                          if (filtered.length === 0) {
+                                            return <div className="px-3 py-2 text-xs" style={{ color: 'var(--text-muted)' }}>No eligible users found.</div>;
+                                          }
+                                          return filtered.map((u) => (
+                                            <button key={u.id} type="button"
+                                              onClick={() => void handleInlineAssign(task.id, u.id)}
+                                              disabled={u.id === task.assigneeId}
+                                              className="flex w-full items-center gap-2 px-3 py-2 text-xs text-left disabled:cursor-default"
+                                              style={{ color: 'var(--text-primary)', opacity: u.id === task.assigneeId ? 0.6 : 1 }}
+                                              onMouseEnter={(e) => { if (u.id !== task.assigneeId) e.currentTarget.style.backgroundColor = 'var(--bg-subtle)'; }}
+                                              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '')}
+                                              role="option" aria-selected={u.id === task.assigneeId}>
+                                              <div className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white"
+                                                style={{ backgroundColor: u.id === task.assigneeId ? 'var(--accent-primary)' : 'var(--sidebar-bg)' }}>
+                                                {u.fullName.charAt(0).toUpperCase()}
+                                              </div>
+                                              <span className="flex-1 truncate">{u.fullName || u.email || 'Unknown user'}</span>
+                                              {u.id === task.assigneeId && <span className="text-[10px]" style={{ color: 'var(--accent-primary)' }}>✓</span>}
+                                            </button>
+                                          ));
+                                        })()}
+                                      </div>
+                                      {/* Unassign */}
+                                      {task.assigneeId && (
+                                        <div className="border-t py-1" style={{ borderColor: 'var(--border-default)' }}>
+                                          <button type="button"
+                                            onClick={() => void handleInlineAssign(task.id, null)}
+                                            className="flex w-full items-center gap-2 px-3 py-2 text-xs text-left"
+                                            style={{ color: 'var(--state-warning)' }}
+                                            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--state-warning-soft)')}
+                                            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '')}>
+                                            <UserCircle className="h-3.5 w-3.5 flex-shrink-0" />
+                                            Unassign
+                                          </button>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
-                              ) : <span style={{ color: 'var(--text-disabled)' }}>—</span>}
+                              ) : (
+                                /* Read-only: Member, Viewer, or completed/cancelled task */
+                                task.assignee ? (
+                                  <div className="flex items-center gap-1.5">
+                                    <div className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white"
+                                      style={{ backgroundColor: 'var(--sidebar-bg)' }}>
+                                      {task.assignee.fullName.charAt(0).toUpperCase()}
+                                    </div>
+                                    <span className="truncate" style={{ maxWidth: '90px', color: 'var(--text-secondary)' }}>{task.assignee.fullName}</span>
+                                  </div>
+                                ) : <span style={{ color: 'var(--text-disabled)' }}>—</span>
+                              )}
                             </td>
+
                             <td className="px-4 py-3 text-xs">
                               {(() => {
                                 // Reference items: due date is a review date, not an overdue trigger
@@ -2478,27 +2732,22 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                                 );
                               })()}
                             </td>
-                            {/* Created — compact absolute date + Kuwait tooltip */}
+                            {/* Created — Kuwait date with tooltip */}
                             <td className="px-4 py-3 text-xs hidden lg:table-cell" style={{ color: 'var(--text-muted)' }}>
                               {task.createdAt ? (
                                 <span title={formatKuwaitTooltip(task.createdAt)} className="cursor-help">
-                                  {new Date(task.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                  {formatKuwaitDate(task.createdAt)}
                                 </span>
                               ) : '—'}
                             </td>
-                            {/* Updated — relative time + Kuwait tooltip */}
+                            {/* Updated — exact Kuwait date + time; relative time as tooltip */}
                             <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>
                               {task.updatedAt ? (
-                                <span title={formatKuwaitTooltip(task.updatedAt)} className="cursor-help">
-                                  {relativeTime(task.updatedAt)}
-                                </span>
+                                <div className="flex flex-col gap-0" title={relativeTime(task.updatedAt)}>
+                                  <span style={{ color: 'var(--text-secondary)' }}>{formatKuwaitDate(task.updatedAt)}</span>
+                                  <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{formatKuwaitTime(task.updatedAt)}</span>
+                                </div>
                               ) : '—'}
-                            </td>
-                            <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>
-                              {task._count.subtasks > 0 ? task._count.subtasks : '—'}
-                            </td>
-                            <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>
-                              {task._count.comments > 0 ? task._count.comments : '—'}
                             </td>
 
                             {/* Three-dot menu */}
@@ -2551,7 +2800,7 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                       {canManage && (
                         <tfoot>
                           <tr style={{ borderTop: '1px solid var(--border-subtle)' }}>
-                            <td colSpan={8} className="px-4 py-2">
+                            <td colSpan={7} className="px-4 py-2">
                               <div className="flex items-center gap-2">
                                 {addingInline
                                   ? <Loader2 className="h-3.5 w-3.5 animate-spin flex-shrink-0" style={{ color: 'var(--accent-primary)' }} />
