@@ -7,6 +7,7 @@ import { AuditLogService } from '../audit-log/audit-log.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { SetUserStatusDto } from './dto/set-user-status.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 
 // Technical/system accounts that only SUPER_ADMIN can manage.
 // SUPER_USER is restricted to business users only and cannot see or touch these.
@@ -262,13 +263,12 @@ export class UsersService {
     return this.findOne(id);
   }
 
-  async resetPassword(id: string, actorId: string, actorRoles: string[] = []): Promise<{ temporaryPassword: string }> {
+  async resetPassword(id: string, dto: ResetPasswordDto, actorId: string, actorRoles: string[] = []): Promise<{ message: string }> {
     await this.assertCanTargetUser(id, actorRoles);
     const existing = await this.prisma.user.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('User not found');
 
-    const temporaryPassword = this.generateTempPassword();
-    const passwordHash = await bcrypt.hash(temporaryPassword, 12);
+    const passwordHash = await bcrypt.hash(dto.temporaryPassword, 12);
 
     await this.prisma.user.update({
       where: { id },
@@ -282,7 +282,7 @@ export class UsersService {
       entityId: id,
     });
 
-    return { temporaryPassword };
+    return { message: 'Password has been reset. The user must change it at next login.' };
   }
 
   async backfillUsernames(): Promise<{ updated: number }> {

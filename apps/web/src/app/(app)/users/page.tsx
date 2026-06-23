@@ -5,7 +5,7 @@ import {
   Plus, Search, Loader2, Users, CheckCircle2, XCircle,
   MoreHorizontal, RefreshCw, KeyRound, UserCheck, UserX,
   FolderOpen, ExternalLink, Trash2, X, ShieldCheck, Shield, User,
-  AlertTriangle,
+  AlertTriangle, Eye, EyeOff,
 } from 'lucide-react';
 import { apiGet, apiPostAuth, apiPatchAuth, apiDeleteAuth } from '@/lib/api';
 import Link from 'next/link';
@@ -166,7 +166,12 @@ export default function UsersPage() {
   const [wsRemoveLoading, setWsRemoveLoading] = useState<string | null>(null);
 
   const [actionMenu, setActionMenu] = useState<string | null>(null);
-  const [resetResult, setResetResult] = useState<{ userId: string; password: string } | null>(null);
+  // Reset password dialog state
+  const [resetTarget, setResetTarget]   = useState<UserRow | null>(null);
+  const [resetPw, setResetPw]           = useState('');
+  const [showResetPw, setShowResetPw]   = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetError, setResetError]     = useState('');
 
   // ── Permissions ───────────────────────────────────────────────────────────
 
@@ -333,17 +338,35 @@ export default function UsersPage() {
     setActionMenu(null);
   }
 
-  async function handleResetPassword(u: UserRow) {
-    if (!token) return;
-    try {
-      const result = await apiPostAuth<{ temporaryPassword: string }>(
-        `/users/${u.id}/reset-password`, {}, token,
-      );
-      setResetResult({ userId: u.id, password: result.temporaryPassword });
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to reset password');
-    }
+  function handleResetPassword(u: UserRow) {
+    setResetTarget(u);
+    setResetPw('');
+    setShowResetPw(false);
+    setResetError('');
     setActionMenu(null);
+  }
+
+  async function submitReset() {
+    if (!token || !resetTarget) return;
+    if (resetPw.length < 3) {
+      setResetError('Temporary password must be at least 3 characters.');
+      return;
+    }
+    setResetLoading(true);
+    setResetError('');
+    try {
+      await apiPostAuth<{ message: string }>(
+        `/users/${resetTarget.id}/reset-password`,
+        { temporaryPassword: resetPw },
+        token,
+      );
+      setResetTarget(null);
+      showToast('Password has been reset. The user must change it at next login.');
+    } catch (err) {
+      setResetError(err instanceof Error ? err.message : 'Failed to reset password');
+    } finally {
+      setResetLoading(false);
+    }
   }
 
   // ── Edit workspace membership ─────────────────────────────────────────────
@@ -1075,24 +1098,59 @@ export default function UsersPage() {
         </div>
       )}
 
-      {/* ── Password Reset Result ──────────────────────────────────────────── */}
-      {resetResult && (
+      {/* ── Reset Password Dialog ──────────────────────────────────────────── */}
+      {resetTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(0,0,0,0.4)' }}>
           <div className="w-full max-w-sm rounded-xl border shadow-xl p-6"
             style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
-            <div className="flex flex-col items-center gap-3 text-center">
-              <KeyRound className="h-8 w-8" style={{ color: 'var(--accent-primary)' }} />
-              <h2 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>Password Reset</h2>
-              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                New temporary password. Share it securely. The user will be prompted to change it on next login.
-              </p>
-              <div className="w-full rounded-lg border px-4 py-3 text-center text-lg font-mono font-semibold tracking-widest"
-                style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)', color: 'var(--text-primary)' }}>
-                {resetResult.password}
+            <div className="mb-4 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <KeyRound className="h-4 w-4" style={{ color: 'var(--accent-primary)' }} />
+                <h2 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>Reset Password</h2>
               </div>
-              <button type="button" onClick={() => setResetResult(null)}
-                className="mt-1 rounded-lg px-6 py-1.5 text-sm font-medium text-white"
-                style={{ backgroundColor: 'var(--accent-primary)' }}>Done</button>
+              <button type="button" onClick={() => setResetTarget(null)} style={{ color: 'var(--text-muted)' }}>
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <p className="mb-4 text-sm" style={{ color: 'var(--text-muted)' }}>
+              Set a temporary password for <strong style={{ color: 'var(--text-primary)' }}>{resetTarget.fullName}</strong>.
+              They must change it at next login.
+            </p>
+            <div className="mb-1 text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Temporary Password *</div>
+            <div className="relative mb-1">
+              <input
+                type={showResetPw ? 'text' : 'password'}
+                value={resetPw}
+                onChange={(e) => setResetPw(e.target.value)}
+                placeholder="e.g. 123"
+                className="w-full rounded-lg border px-3 py-2 pr-10 text-sm"
+                style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)', color: 'var(--text-primary)' }}
+                autoFocus
+                onKeyDown={(e) => { if (e.key === 'Enter') void submitReset(); }}
+              />
+              <button type="button" onClick={() => setShowResetPw((v) => !v)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2"
+                style={{ color: 'var(--text-muted)' }}
+                aria-label={showResetPw ? 'Hide password' : 'Show password'}>
+                {showResetPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+            <p className="mb-4 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+              Minimum 3 characters. The user must change this password at next login.
+            </p>
+            {resetError && (
+              <p className="mb-3 text-sm" style={{ color: 'var(--state-error)' }}>{resetError}</p>
+            )}
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setResetTarget(null)}
+                className="rounded-lg border px-4 py-1.5 text-sm"
+                style={{ borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}>Cancel</button>
+              <button type="button" onClick={() => void submitReset()} disabled={resetLoading}
+                className="flex items-center gap-1.5 rounded-lg px-4 py-1.5 text-sm font-medium text-white disabled:opacity-60"
+                style={{ backgroundColor: 'var(--accent-primary)' }}>
+                {resetLoading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                Reset Password
+              </button>
             </div>
           </div>
         </div>

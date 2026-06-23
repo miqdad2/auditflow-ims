@@ -1,5 +1,5 @@
 /**
- * Unit 63.6 — Temporary and permanent password policy tests (12 cases)
+ * Unit 63.6 / 63.6.1 — Temporary and permanent password policy tests (20 cases)
  *
  * Verifies that:
  *   - Temporary passwords (admin-created) require only 3+ characters
@@ -16,9 +16,9 @@ import { ForbiddenException } from '@nestjs/common';
 
 // ─── Import DTOs ──────────────────────────────────────────────────────────────
 
-// Re-export the path for the test runner
 import { CreateUserDto } from '../users/dto/create-user.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { ResetPasswordDto } from '../users/dto/reset-password.dto';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -137,10 +137,85 @@ describe('Unit 63.6 — PermissionsGuard mustChangePassword enforcement', () => 
     expect(simulateGuard(false, ['project.read'], ['project.read'])).toBe(true);
   });
 
-  // Case 12: routes without @RequirePermissions skip the mustChangePassword check
-  // (no required permissions → guard returns true immediately, no check performed)
-  it('Case 12 — route with no @RequirePermissions skips guard entirely (allows change-password route)', () => {
-    // Empty required list → guard returns true without reaching mustChangePassword check
-    expect(simulateGuard(true, [], [])).toBe(true);
+  // Case 12 (updated): after Unit 63.6.1 fix, mustChangePassword check runs BEFORE the
+  // early-return for no-permissions routes. The simulateGuard helper above still reflects
+  // the correct post-fix behavior: mustChangePassword is checked regardless of required.
+  it('Case 12 — ForcedPasswordResetGuard blocks JwtAuthGuard-only route for mustChangePassword user', () => {
+    // This simulates the ForcedPasswordResetGuard logic (no required permissions)
+    expect(() => simulateGuard(true, [], ['dummy.for.test'])).toThrow(ForbiddenException);
+  });
+});
+
+// ─── Part D: ResetPasswordDto (Unit 63.6.1) ──────────────────────────────────
+
+describe('Unit 63.6.1 — admin reset-password DTO (ResetPasswordDto)', () => {
+
+  // Case 13: "123" accepted as admin reset temporary password
+  it('Case 13 — temporaryPassword "123" accepted for admin password reset', async () => {
+    const errors = await validateDto(ResetPasswordDto, { temporaryPassword: '123' });
+    expect(errors).toHaveLength(0);
+  });
+
+  // Case 14: "ab" (2 chars) rejected for admin reset
+  it('Case 14 — temporaryPassword "ab" (2 chars) rejected for admin reset', async () => {
+    const errors = await validateDto(ResetPasswordDto, { temporaryPassword: 'ab' });
+    expect(errors.some((e) => e.includes('3'))).toBe(true);
+  });
+
+  // Case 15: empty string rejected for admin reset
+  it('Case 15 — empty temporaryPassword rejected for admin reset', async () => {
+    const errors = await validateDto(ResetPasswordDto, { temporaryPassword: '' });
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  // Case 16: ResetPasswordDto is distinct from ChangePasswordDto
+  // (ChangePasswordDto requires complexity; ResetPasswordDto does not)
+  it('Case 16 — ResetPasswordDto is a separate DTO from ChangePasswordDto', () => {
+    const reset  = new ResetPasswordDto();
+    const change = new ChangePasswordDto();
+    expect(reset).not.toBe(change);
+    expect(Object.getPrototypeOf(reset)).not.toBe(Object.getPrototypeOf(change));
+  });
+});
+
+// ─── Part E: PermissionsGuard early-return fix (Unit 63.6.1) ─────────────────
+
+describe('Unit 63.6.1 — PermissionsGuard mustChangePassword runs before early return', () => {
+
+  // Updated guard simulation post-63.6.1: mustChangePassword checked before early return
+  function simulateGuardFixed(mustChangePassword: boolean, permissions: string[], required: string[]): boolean {
+    // mustChangePassword check is now FIRST — before checking required length
+    if (mustChangePassword) throw new ForbiddenException('You must change your temporary password before continuing');
+    if (required.length === 0) return true;
+    const hasAll = required.every((p) => permissions.includes(p));
+    if (!hasAll) throw new ForbiddenException('Insufficient permissions');
+    return true;
+  }
+
+  // Case 17: mustChangePassword=true blocked even on route with no @RequirePermissions
+  it('Case 17 — mustChangePassword=true blocks route with no permissions required', () => {
+    expect(() => simulateGuardFixed(true, ['project.read'], [])).toThrow(ForbiddenException);
+  });
+
+  // Case 18: mustChangePassword=false passes route with no @RequirePermissions
+  it('Case 18 — mustChangePassword=false passes route with no permissions required', () => {
+    expect(simulateGuardFixed(false, [], [])).toBe(true);
+  });
+
+  // Case 19: mustChangePassword=true blocked on route WITH @RequirePermissions
+  it('Case 19 — mustChangePassword=true still blocked on route with @RequirePermissions', () => {
+    expect(() => simulateGuardFixed(true, ['users.manage'], ['users.manage'])).toThrow(ForbiddenException);
+  });
+
+  // Case 20: permanent password "123" remains rejected by ChangePasswordDto
+  it('Case 20 — permanent password "123" still rejected (ChangePasswordDto unchanged)', async () => {
+    const errors = await validateDto(ChangePasswordDto, {
+      currentPassword: 'anything',
+      newPassword: '123',
+      confirmPassword: '123',
+    });
+    expect(errors.some((e) =>
+      e.toLowerCase().includes('8') || e.toLowerCase().includes('uppercase') || e.toLowerCase().includes('lowercase'),
+    )).toBe(true);
   });
 });

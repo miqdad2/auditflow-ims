@@ -10,6 +10,7 @@ import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { SetUserStatusDto } from './dto/set-user-status.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -93,8 +94,9 @@ export class UsersController {
   @RequirePermissions('users.manage')
   resetPassword(
     @Param('id') id: string,
+    @Body() dto: ResetPasswordDto,
     @CurrentUser() user: Record<string, unknown>,
   ) {
-    return this.svc.resetPassword(id, user.id as string, extractUserRoles(user));
+    return this.svc.resetPassword(id, dto, user.id as string, extractUserRoles(user));
   }
 }

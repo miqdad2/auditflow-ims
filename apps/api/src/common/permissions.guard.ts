@@ -11,17 +11,19 @@ export class PermissionsGuard implements CanActivate {
       context.getHandler(),
       context.getClass(),
     ]);
-    if (!required || required.length === 0) return true;
 
-    const { user } = context.switchToHttp().getRequest<{ user: Record<string, unknown> }>();
+    const { user } = context.switchToHttp().getRequest<{ user?: Record<string, unknown> }>();
 
-    // Block all business routes for users who must change their temporary password.
-    // /auth/change-password and /auth/me do not use @RequirePermissions, so they remain accessible.
-    if (user.mustChangePassword) {
+    // Block all @RequirePermissions routes for users with a forced password-change pending.
+    // Checked before the early-return so it applies even to routes without explicit permissions.
+    // Routes using only JwtAuthGuard (notifications, roles) must use ForcedPasswordResetGuard.
+    if (user?.mustChangePassword) {
       throw new ForbiddenException('You must change your temporary password before continuing');
     }
 
-    const userPerms = extractUserPermissions(user);
+    if (!required || required.length === 0) return true;
+
+    const userPerms = extractUserPermissions(user ?? {});
     const hasAll = required.every((p) => userPerms.includes(p));
     if (!hasAll) throw new ForbiddenException('Insufficient permissions');
     return true;

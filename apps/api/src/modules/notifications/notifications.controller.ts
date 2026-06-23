@@ -1,10 +1,11 @@
 import { Controller, Get, Patch, Param, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/jwt-auth.guard';
+import { ForcedPasswordResetGuard } from '../../common/forced-password-reset.guard';
 import { CurrentUser } from '../../common/current-user.decorator';
 import { NotificationsService } from './notifications.service';
 
 @Controller('notifications')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ForcedPasswordResetGuard)
 export class NotificationsController {
   constructor(private svc: NotificationsService) {}
 

@@ -415,7 +415,7 @@ describe('UsersService.resetPassword()', () => {
     });
     const svc = await makeService(prisma);
 
-    await expect(svc.resetPassword('sa1', 'su1', ROLES.SUPER_USER))
+    await expect(svc.resetPassword('sa1', { temporaryPassword: '123' }, 'su1', ROLES.SUPER_USER))
       .rejects.toBeInstanceOf(ForbiddenException);
   });
 
@@ -434,7 +434,7 @@ describe('UsersService.resetPassword()', () => {
     });
     const svc = await makeService(prisma);
 
-    await expect(svc.resetPassword('ita1', 'sa1', ROLES.SUPER_ADMIN))
-      .resolves.toHaveProperty('temporaryPassword');
+    await expect(svc.resetPassword('ita1', { temporaryPassword: '123' }, 'sa1', ROLES.SUPER_ADMIN))
+      .resolves.toHaveProperty('message');
   });
 });
