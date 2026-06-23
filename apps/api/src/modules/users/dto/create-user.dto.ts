@@ -23,7 +23,7 @@ export class CreateUserDto {
   roleIds?: string[];
 
   @IsString()
-  @MinLength(8)
+  @MinLength(3, { message: 'Temporary password must be at least 3 characters' })
   temporaryPassword: string;
 
   @IsBoolean()

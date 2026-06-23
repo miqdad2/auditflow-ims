@@ -239,6 +239,10 @@ export default function UsersPage() {
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     if (!token) return;
+    if (createForm.temporaryPassword.length < 3) {
+      setCreateError('Temporary password must be at least 3 characters.');
+      return;
+    }
     setCreateLoading(true);
     setCreateError('');
     setCreateSuccess('');
@@ -693,10 +697,13 @@ export default function UsersPage() {
                 </div>
                 <div>
                   <label className="mb-1 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Temporary Password *</label>
-                  <input required type="text" minLength={8} value={createForm.temporaryPassword}
+                  <input required type="text" value={createForm.temporaryPassword}
                     onChange={(e) => setCreateForm((p) => ({ ...p, temporaryPassword: e.target.value }))}
                     className="w-full rounded-lg border px-3 py-1.5 text-sm"
                     style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)', color: 'var(--text-primary)' }} />
+                  <p className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                    Minimum 3 characters. The user must change this password at first login.
+                  </p>
                 </div>
               </div>
 

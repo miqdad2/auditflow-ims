@@ -132,10 +132,10 @@ export default function ChangePasswordPage() {
 
           <div>
             <h1 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
-              Set Your Password
+              Set Permanent Password
             </h1>
             <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-              You must set a new password before continuing.
+              You are using a temporary password. Create a new permanent password to continue.
             </p>
           </div>
         </div>
@@ -149,7 +149,7 @@ export default function ChangePasswordPage() {
             border: '1px solid var(--state-warning)',
           }}
         >
-          Your account is using a temporary password. Please set a secure permanent password to proceed.
+          Your account is using a temporary password. You cannot access the system until you create a permanent password. There is no skip or remind-me-later option.
         </div>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>

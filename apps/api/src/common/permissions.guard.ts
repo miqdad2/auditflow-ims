@@ -14,6 +14,13 @@ export class PermissionsGuard implements CanActivate {
     if (!required || required.length === 0) return true;
 
     const { user } = context.switchToHttp().getRequest<{ user: Record<string, unknown> }>();
+
+    // Block all business routes for users who must change their temporary password.
+    // /auth/change-password and /auth/me do not use @RequirePermissions, so they remain accessible.
+    if (user.mustChangePassword) {
+      throw new ForbiddenException('You must change your temporary password before continuing');
+    }
+
     const userPerms = extractUserPermissions(user);
     const hasAll = required.every((p) => userPerms.includes(p));
     if (!hasAll) throw new ForbiddenException('Insufficient permissions');

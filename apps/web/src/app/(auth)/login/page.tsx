@@ -32,7 +32,9 @@ export default function LoginPage() {
         { login: loginField.trim(), password },
       );
       login(data.accessToken, data.user);
-      router.replace('/dashboard');
+      // Route directly to change-password when a temporary password must be replaced.
+      // This avoids a brief dashboard flash before the (app) layout catches the flag.
+      router.replace(data.user.mustChangePassword ? '/change-password' : '/dashboard');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Login failed. Please try again.');
     } finally {
