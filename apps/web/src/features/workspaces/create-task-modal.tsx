@@ -14,10 +14,6 @@ interface Props {
   onCreated: (task: TaskSummary) => void;
 }
 
-// ─── Priority dropdown options ───────────────────────────────────────────────
-// "FOR_REFERENCE_ONLY" is a UI-only sentinel — it maps to isReference=true
-// and is never stored as a real priority value.
-
 const PRIORITY_OPTIONS = [
   { value: 'FOR_REFERENCE_ONLY', label: 'For Reference Only' },
   { value: 'LOW',      label: 'Low' },
@@ -34,6 +30,8 @@ const RECURRENCE_OPTIONS = [
   { value: 'ANNUAL',     label: 'Every 1 Year' },
 ] as const;
 
+const ELEVATED_ROLES = ['SUPER_ADMIN', 'IT_ADMIN', 'ISO_MANAGER', 'QHSE_USER', 'SUPER_USER'];
+
 const inputStyle = {
   backgroundColor: 'var(--bg-muted)',
   border: '1px solid var(--border-default)',
@@ -41,16 +39,25 @@ const inputStyle = {
 };
 
 export function CreateTaskModal({ workspaceId, taskListId, parentTaskId, onClose, onCreated }: Props) {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
 
-  const [title,       setTitle]       = useState('');
-  const [description, setDescription] = useState('');
-  const [priorityKey, setPriorityKey] = useState<string>('MEDIUM');
-  const [dueDate,     setDueDate]     = useState('');
-  const [recurrence,  setRecurrence]  = useState('NONE');
-  const [recEndDate,  setRecEndDate]  = useState('');
-  const [error,       setError]       = useState('');
-  const [loading,     setLoading]     = useState(false);
+  // Detect MEMBER mode: not elevated and does not have tasks.create permission
+  const roles       = (user?.roles ?? []) as string[];
+  const permissions = (user?.permissions ?? []) as string[];
+  const isElevated  = roles.some((r) => ELEVATED_ROLES.includes(r));
+  const hasCreatePerm = permissions.includes('tasks.create');
+  // MEMBER private task mode: workspace member without elevated role or create permission
+  const isMemberCreate = !isElevated && !hasCreatePerm && !!workspaceId && !parentTaskId;
+
+  const [title,        setTitle]        = useState('');
+  const [description,  setDescription]  = useState('');
+  const [priorityKey,  setPriorityKey]  = useState<string>('MEDIUM');
+  const [dueDate,      setDueDate]      = useState('');
+  const [recurrence,   setRecurrence]   = useState('NONE');
+  const [recEndDate,   setRecEndDate]   = useState('');
+  const [approvalNote, setApprovalNote] = useState('');
+  const [error,        setError]        = useState('');
+  const [loading,      setLoading]      = useState(false);
 
   const isReference  = priorityKey === 'FOR_REFERENCE_ONLY';
   const realPriority = isReference ? 'LOW' : priorityKey;
@@ -59,11 +66,15 @@ export function CreateTaskModal({ workspaceId, taskListId, parentTaskId, onClose
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!title.trim()) { setError('Task title is required.'); return; }
-    if (isRecurring && !dueDate) {
+    if (isMemberCreate && !approvalNote.trim()) {
+      setError('A business reason is required for private task requests.');
+      return;
+    }
+    if (!isMemberCreate && isRecurring && !dueDate) {
       setError('A due date is required for recurring tasks.');
       return;
     }
-    if (recEndDate && dueDate && new Date(recEndDate) <= new Date(dueDate)) {
+    if (!isMemberCreate && recEndDate && dueDate && new Date(recEndDate) <= new Date(dueDate)) {
       setError('Recurrence end date must be after the first due date.');
       return;
     }
@@ -76,10 +87,14 @@ export function CreateTaskModal({ workspaceId, taskListId, parentTaskId, onClose
         title:              title.trim(),
         description:        description.trim() || undefined,
         priority:           realPriority,
-        isReference,
+        isReference:        isMemberCreate ? false : isReference,
         dueDate:            dueDate || undefined,
-        recurrenceInterval: recurrence,
-        ...(recEndDate && { recurrenceEndDate: recEndDate }),
+        ...(isMemberCreate
+          ? { approvalNote: approvalNote.trim() }
+          : {
+              recurrenceInterval: recurrence,
+              ...(recEndDate && { recurrenceEndDate: recEndDate }),
+            }),
       }, token!);
       onCreated(task);
     } catch (err: unknown) {
@@ -88,6 +103,8 @@ export function CreateTaskModal({ workspaceId, taskListId, parentTaskId, onClose
       setLoading(false);
     }
   }
+
+  const modalTitle = parentTaskId ? 'New Subtask' : 'New Task';
 
   return (
     <div
@@ -101,12 +118,26 @@ export function CreateTaskModal({ workspaceId, taskListId, parentTaskId, onClose
         {/* Header */}
         <div className="mb-5 flex items-center justify-between">
           <h2 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
-            {parentTaskId ? 'New Subtask' : 'New Task'}
+            {modalTitle}
           </h2>
           <button type="button" onClick={onClose} style={{ color: 'var(--text-muted)' }}>
             <X className="h-5 w-5" />
           </button>
         </div>
+
+        {/* MEMBER info banner */}
+        {isMemberCreate && (
+          <div
+            className="mb-4 rounded-lg px-3 py-2.5 text-xs"
+            style={{ backgroundColor: 'var(--accent-soft)', border: '1px solid var(--accent-primary)' }}
+          >
+            <p className="font-semibold mb-1" style={{ color: 'var(--accent-primary)' }}>Approval required</p>
+            <p style={{ color: 'var(--text-secondary)' }}>
+              You can create this task and start working immediately. It will become an official workspace task
+              after review by an authorized reviewer.
+            </p>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
 
@@ -137,21 +168,45 @@ export function CreateTaskModal({ workspaceId, taskListId, parentTaskId, onClose
             />
           </div>
 
-          {/* Row 1: Priority + Due Date */}
+          {/* Business reason (MEMBER only) */}
+          {isMemberCreate && (
+            <div className="flex flex-col gap-1.5">
+              <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
+                Business Reason *
+              </label>
+              <textarea
+                value={approvalNote} onChange={(e) => setApprovalNote(e.target.value)}
+                placeholder="Why does this task need to be done? (required for the approval request)"
+                rows={2} maxLength={1000}
+                className="w-full resize-none rounded-lg px-3 py-2 text-sm outline-none"
+                style={inputStyle}
+                onFocus={(e) => (e.currentTarget.style.borderColor = 'var(--accent-primary)')}
+                onBlur={(e)  => (e.currentTarget.style.borderColor = 'var(--border-default)')}
+              />
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                {approvalNote.length}/1000 characters
+              </p>
+            </div>
+          )}
+
+          {/* Priority + Due Date (both modes) */}
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5">
               <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>Priority</label>
               <select
-                value={priorityKey}
+                value={isMemberCreate ? priorityKey.replace('FOR_REFERENCE_ONLY', 'MEDIUM') : priorityKey}
                 onChange={(e) => setPriorityKey(e.target.value)}
                 className="w-full rounded-lg px-3 py-2 text-sm outline-none cursor-pointer"
                 style={inputStyle}
               >
-                {PRIORITY_OPTIONS.map((opt) => (
+                {(isMemberCreate
+                  ? PRIORITY_OPTIONS.filter((o) => o.value !== 'FOR_REFERENCE_ONLY')
+                  : PRIORITY_OPTIONS
+                ).map((opt) => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}
               </select>
-              {isReference && (
+              {!isMemberCreate && isReference && (
                 <div
                   className="flex items-start gap-1.5 rounded-lg px-2 py-1.5 text-xs"
                   style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--text-muted)', border: '1px solid var(--border-default)' }}
@@ -164,8 +219,8 @@ export function CreateTaskModal({ workspaceId, taskListId, parentTaskId, onClose
 
             <div className="flex flex-col gap-1.5">
               <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
-                {isReference ? 'Review Date' : 'Due Date'}
-                {isRecurring && <span style={{ color: 'var(--state-error)' }}> *</span>}
+                Due Date
+                {!isMemberCreate && isRecurring && <span style={{ color: 'var(--state-error)' }}> *</span>}
               </label>
               <input
                 type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)}
@@ -175,42 +230,46 @@ export function CreateTaskModal({ workspaceId, taskListId, parentTaskId, onClose
             </div>
           </div>
 
-          {/* Row 2: Repeat + End Repeat */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1.5">
-              <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>Repeat</label>
-              <select
-                value={recurrence}
-                onChange={(e) => setRecurrence(e.target.value)}
-                className="w-full rounded-lg px-3 py-2 text-sm outline-none cursor-pointer"
-                style={inputStyle}
-              >
-                {RECURRENCE_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-            </div>
+          {/* Recurrence (elevated users only) */}
+          {!isMemberCreate && (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>Repeat</label>
+                  <select
+                    value={recurrence}
+                    onChange={(e) => setRecurrence(e.target.value)}
+                    className="w-full rounded-lg px-3 py-2 text-sm outline-none cursor-pointer"
+                    style={inputStyle}
+                  >
+                    {RECURRENCE_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </div>
 
-            <div className="flex flex-col gap-1.5">
-              <label
-                className="text-sm font-medium"
-                style={{ color: isRecurring ? 'var(--text-secondary)' : 'var(--text-disabled)' }}
-              >
-                End Repeat
-              </label>
-              <input
-                type="date" value={recEndDate} onChange={(e) => setRecEndDate(e.target.value)}
-                disabled={!isRecurring}
-                className="w-full rounded-lg px-3 py-2 text-sm outline-none"
-                style={{ ...inputStyle, opacity: isRecurring ? 1 : 0.4, cursor: isRecurring ? 'auto' : 'not-allowed' }}
-              />
-            </div>
-          </div>
+                <div className="flex flex-col gap-1.5">
+                  <label
+                    className="text-sm font-medium"
+                    style={{ color: isRecurring ? 'var(--text-secondary)' : 'var(--text-disabled)' }}
+                  >
+                    End Repeat
+                  </label>
+                  <input
+                    type="date" value={recEndDate} onChange={(e) => setRecEndDate(e.target.value)}
+                    disabled={!isRecurring}
+                    className="w-full rounded-lg px-3 py-2 text-sm outline-none"
+                    style={{ ...inputStyle, opacity: isRecurring ? 1 : 0.4, cursor: isRecurring ? 'auto' : 'not-allowed' }}
+                  />
+                </div>
+              </div>
 
-          {isRecurring && (
-            <p className="text-xs" style={{ color: 'var(--text-muted)', marginTop: '-8px' }}>
-              A new occurrence is created automatically when this task is completed.
-            </p>
+              {isRecurring && (
+                <p className="text-xs" style={{ color: 'var(--text-muted)', marginTop: '-8px' }}>
+                  A new occurrence is created automatically when this task is completed.
+                </p>
+              )}
+            </>
           )}
 
           {error && <p className="text-sm" style={{ color: 'var(--state-error)' }}>{error}</p>}
@@ -229,7 +288,9 @@ export function CreateTaskModal({ workspaceId, taskListId, parentTaskId, onClose
               className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
               style={{ backgroundColor: 'var(--accent-primary)' }}
             >
-              {loading ? <><Loader2 className="h-4 w-4 animate-spin" /> Creating…</> : 'Create Task'}
+              {loading
+                ? <><Loader2 className="h-4 w-4 animate-spin" /> Creating…</>
+                : 'Create Task'}
             </button>
           </div>
         </form>

@@ -113,6 +113,12 @@ export function TaskDetailPanel({ taskId, onClose, onUpdated, onDeleted, externa
   // ── Priority saving state ─────────────────────────────────────────────────
   const [prioritySaving, setPrioritySaving] = useState(false);
 
+  // ── Approval workflow state (Unit 63.1) ──────────────────────────────────
+  const [approvalLoading,  setApprovalLoading]  = useState(false);
+  const [approvalError,    setApprovalError]    = useState('');
+  const [approvalReviewNote, setApprovalReviewNote] = useState('');
+  const [approvalAction,   setApprovalAction]   = useState<'return' | 'reject' | null>(null);
+
   // ── Comments ─────────────────────────────────────────────────────────────
   const [newComment,      setNewComment]      = useState('');
   const [commentLoading,  setCommentLoading]  = useState(false);
@@ -139,6 +145,11 @@ export function TaskDetailPanel({ taskId, onClose, onUpdated, onDeleted, externa
   const isWsOwnerOrManager = wsRole === 'OWNER' || wsRole === 'MANAGER';
   // Assignees without elevated/update permissions use MEMBER tier (limited transitions: TODO→IN_PROGRESS, IN_PROGRESS→WAITING_REVIEW, REJECTED→IN_PROGRESS)
   const statusTier: StatusTier = isElevated || canUpdate ? 'ELEVATED' : isWsOwnerOrManager ? 'MANAGER' : 'MEMBER';
+
+  // Approval workflow (Unit 63.1)
+  const isCreator   = !!task && task.createdById === user?.id;
+  const isReviewer  = isElevated || isWsOwnerOrManager;
+  const approvalStatus = task?.approvalStatus ?? 'APPROVED';
 
   // Valid next statuses for the current task status + role
   const validNextStatuses: string[] = task
@@ -340,6 +351,54 @@ export function TaskDetailPanel({ taskId, onClose, onUpdated, onDeleted, externa
     } finally {
       setStatusChanging(false);
     }
+  }
+
+  // ── Approval action handlers (Unit 63.1) ─────────────────────────────────
+
+  async function handleApproveTask(andComplete = false) {
+    if (!task || !token) return;
+    setApprovalLoading(true); setApprovalError('');
+    try {
+      const endpoint = andComplete ? `/tasks/${task.id}/approval/approve-complete` : `/tasks/${task.id}/approval/approve`;
+      const updated = await apiPostAuth<TaskSummary>(endpoint, { reviewNote: approvalReviewNote.trim() || undefined }, token);
+      setTask((p) => p ? { ...p, ...updated } : null);
+      onUpdated(updated);
+      setApprovalReviewNote('');
+      void load();
+    } catch (err: unknown) {
+      setApprovalError(err instanceof Error ? err.message : 'Approval failed.');
+    } finally { setApprovalLoading(false); }
+  }
+
+  async function handleApprovalWithNote(action: 'return' | 'reject') {
+    if (!task || !token || !approvalReviewNote.trim()) {
+      setApprovalError('A reason is required.');
+      return;
+    }
+    setApprovalLoading(true); setApprovalError('');
+    try {
+      const updated = await apiPostAuth<TaskSummary>(`/tasks/${task.id}/approval/${action}`, { reviewNote: approvalReviewNote.trim() }, token);
+      setTask((p) => p ? { ...p, ...updated } : null);
+      onUpdated(updated);
+      setApprovalAction(null);
+      setApprovalReviewNote('');
+      void load();
+    } catch (err: unknown) {
+      setApprovalError(err instanceof Error ? err.message : 'Action failed.');
+    } finally { setApprovalLoading(false); }
+  }
+
+  async function handleResubmitTask() {
+    if (!task || !token) return;
+    setApprovalLoading(true); setApprovalError('');
+    try {
+      const updated = await apiPostAuth<TaskSummary>(`/tasks/${task.id}/approval/resubmit`, {}, token);
+      setTask((p) => p ? { ...p, ...updated } : null);
+      onUpdated(updated);
+      void load();
+    } catch (err: unknown) {
+      setApprovalError(err instanceof Error ? err.message : 'Resubmit failed.');
+    } finally { setApprovalLoading(false); }
   }
 
   async function saveTitle() {
@@ -552,6 +611,183 @@ export function TaskDetailPanel({ taskId, onClose, onUpdated, onDeleted, externa
               {isLocked && (
                 <div className="rounded-lg px-4 py-2 text-xs" style={{ backgroundColor: 'var(--bg-muted)', color: 'var(--text-muted)' }}>
                   This task is {task.status.toLowerCase()}. Editing is restricted.
+                </div>
+              )}
+
+              {/* ── Approval status banner (Unit 63.1) ──────────────────────── */}
+              {approvalStatus === 'PENDING' && isCreator && !isReviewer && (
+                <div className="rounded-lg px-3 py-2.5 flex items-start gap-2"
+                  style={{ backgroundColor: 'var(--accent-soft)', border: '1px solid var(--accent-primary)' }}>
+                  <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" style={{ color: 'var(--accent-primary)' }} />
+                  <div>
+                    <p className="text-xs font-medium" style={{ color: 'var(--accent-primary)' }}>Pending Approval</p>
+                    <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-secondary)' }}>
+                      This task is private and awaiting review. You can continue working. It will become official once approved.
+                    </p>
+                    {task.approvalNote && (
+                      <p className="text-[11px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                        <span className="font-medium">Your reason:</span> {task.approvalNote}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {approvalStatus === 'RETURNED' && isCreator && (
+                <div className="rounded-lg px-3 py-2.5 space-y-2"
+                  style={{ backgroundColor: 'var(--state-warning-soft)', border: '1px solid var(--state-warning)' }}>
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" style={{ color: 'var(--state-warning)' }} />
+                    <div>
+                      <p className="text-xs font-medium" style={{ color: 'var(--state-warning)' }}>Returned for Correction</p>
+                      {task.approvalReviewNote && (
+                        <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-secondary)' }}>
+                          <span className="font-medium">Reviewer note:</span> {task.approvalReviewNote}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleResubmitTask()}
+                    disabled={approvalLoading}
+                    className="w-full rounded-lg px-3 py-1.5 text-xs font-medium"
+                    style={{ backgroundColor: 'var(--state-warning)', color: '#fff', opacity: approvalLoading ? 0.6 : 1 }}
+                  >
+                    {approvalLoading ? 'Resubmitting…' : 'Resubmit for Approval'}
+                  </button>
+                  {approvalError && <p className="text-[11px]" style={{ color: 'var(--state-error)' }}>{approvalError}</p>}
+                </div>
+              )}
+
+              {approvalStatus === 'REJECTED' && isCreator && (
+                <div className="rounded-lg px-3 py-2.5"
+                  style={{ backgroundColor: 'var(--state-error-soft)', border: '1px solid var(--state-error)' }}>
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" style={{ color: 'var(--state-error)' }} />
+                    <div>
+                      <p className="text-xs font-medium" style={{ color: 'var(--state-error)' }}>Request Rejected</p>
+                      {task.approvalReviewNote && (
+                        <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-secondary)' }}>
+                          <span className="font-medium">Reason:</span> {task.approvalReviewNote}
+                        </p>
+                      )}
+                      <p className="text-[11px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                        This task request is closed. No further changes can be made.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Reviewer approval action panel (Unit 63.1) ──────────────── */}
+              {approvalStatus === 'PENDING' && isReviewer && (
+                <div className="rounded-lg px-3 py-3 space-y-3"
+                  style={{ backgroundColor: 'var(--bg-muted)', border: '1px solid var(--border-default)' }}>
+                  <div>
+                    <p className="text-xs font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>Task Approval Request</p>
+                    <div className="space-y-1">
+                      <p className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                        <span className="font-medium">Requested by:</span>{' '}
+                        {task.createdBy?.fullName || 'Unknown user'}
+                      </p>
+                      <p className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                        <span className="font-medium">Created:</span>{' '}
+                        {formatDateTime(task.createdAt)}
+                      </p>
+                      <p className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                        <span className="font-medium">Work status:</span>{' '}
+                        {task.status.replace(/_/g, ' ')}
+                      </p>
+                      {task.approvalNote && (
+                        <p className="text-[11px] pt-0.5" style={{ color: 'var(--text-secondary)' }}>
+                          <span className="font-medium">Business reason:</span>{' '}
+                          {task.approvalNote}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Reviewer note input (for approve-with-note, return, reject) */}
+                  <textarea
+                    value={approvalReviewNote}
+                    onChange={(e) => { setApprovalReviewNote(e.target.value); setApprovalError(''); }}
+                    placeholder={approvalAction ? 'Reason required…' : 'Optional reviewer note…'}
+                    rows={2} maxLength={2000}
+                    className="w-full resize-none rounded-lg px-3 py-2 text-xs outline-none"
+                    style={{ backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-default)', color: 'var(--text-primary)' }}
+                  />
+
+                  {!approvalAction ? (
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleApproveTask(false)}
+                        disabled={approvalLoading}
+                        className="flex-1 rounded-lg px-3 py-1.5 text-xs font-medium text-white"
+                        style={{ backgroundColor: 'var(--state-success)', minWidth: 80 }}
+                      >
+                        {approvalLoading ? <Loader2 className="h-3 w-3 animate-spin inline" /> : 'Approve'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleApproveTask(true)}
+                        disabled={approvalLoading}
+                        className="flex-1 rounded-lg px-3 py-1.5 text-xs font-medium text-white"
+                        style={{ backgroundColor: 'var(--accent-primary)', minWidth: 80 }}
+                      >
+                        Approve &amp; Complete
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setApprovalAction('return'); setApprovalError(''); }}
+                        disabled={approvalLoading}
+                        className="flex-1 rounded-lg px-3 py-1.5 text-xs font-medium"
+                        style={{ backgroundColor: 'var(--state-warning-soft)', color: 'var(--state-warning)', border: '1px solid var(--state-warning)', minWidth: 80 }}
+                      >
+                        Return
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setApprovalAction('reject'); setApprovalError(''); }}
+                        disabled={approvalLoading}
+                        className="flex-1 rounded-lg px-3 py-1.5 text-xs font-medium"
+                        style={{ backgroundColor: 'var(--state-error-soft)', color: 'var(--state-error)', border: '1px solid var(--state-error)', minWidth: 80 }}
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <p className="text-[11px] font-medium" style={{ color: approvalAction === 'reject' ? 'var(--state-error)' : 'var(--state-warning)' }}>
+                        {approvalAction === 'return' ? 'Return reason (required):' : 'Rejection reason (required):'}
+                      </p>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void handleApprovalWithNote(approvalAction)}
+                          disabled={approvalLoading || !approvalReviewNote.trim()}
+                          className="rounded-lg px-3 py-1.5 text-xs font-medium text-white"
+                          style={{
+                            backgroundColor: approvalAction === 'reject' ? 'var(--state-error)' : 'var(--state-warning)',
+                            opacity: (!approvalReviewNote.trim() || approvalLoading) ? 0.5 : 1,
+                          }}
+                        >
+                          {approvalLoading ? <Loader2 className="h-3 w-3 animate-spin inline" /> : approvalAction === 'return' ? 'Confirm Return' : 'Confirm Reject'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setApprovalAction(null); setApprovalError(''); }}
+                          className="rounded-lg px-3 py-1.5 text-xs"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {approvalError && <p className="text-[11px]" style={{ color: 'var(--state-error)' }}>{approvalError}</p>}
                 </div>
               )}
 

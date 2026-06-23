@@ -18,6 +18,7 @@ import {
   TASK_STATUS_TRANSITIONS,
   TASK_STATUS_REASON_REQUIRED,
   TASK_STATUS_REOPEN_SOURCES,
+  TaskApprovalStatus,
 } from '@auditflow/shared';
 
 const ELEVATED_ROLES = ['SUPER_ADMIN', 'IT_ADMIN', 'ISO_MANAGER', 'QHSE_USER', 'SUPER_USER'];
@@ -132,8 +133,23 @@ export class TasksService {
         // baseWhere already contains workspaceId: filters.workspaceId which fully scopes the query.
         // DO NOT apply buildWorkspaceVisibilityWhere here — it includes { workspaceId: null } which
         // is an invalid Prisma filter for Task.workspaceId (non-nullable String).
-        // Policy Option A: all accessible workspace members see all tasks in that workspace.
-        where = baseWhere;
+        // Policy Option A + approval visibility: workspace members see all APPROVED tasks,
+        // plus any PENDING/RETURNED/REJECTED tasks they created,
+        // plus all tasks visible to workspace managers/owners.
+        const approvalVisibilityFilter = {
+          OR: [
+            { approvalStatus: 'APPROVED' },
+            { createdById: actorId },
+            {
+              workspace: {
+                members: {
+                  some: { userId: actorId, roleInWorkspace: { in: ['MANAGER', 'OWNER'] } },
+                },
+              },
+            },
+          ],
+        };
+        where = { AND: [baseWhere, approvalVisibilityFilter] };
       } else if (filters.taskListId) {
         // taskListId provided without workspaceId:
         // Need to scope to accessible workspaces, but using a Task-safe member condition.
@@ -195,7 +211,7 @@ export class TasksService {
     return memberCondition;
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, actorId?: string, actorRoles?: string[]) {
     const task = await this.prisma.task.findUnique({
       where: { id },
       include: {
@@ -204,7 +220,38 @@ export class TasksService {
       },
     });
     if (!task) throw new NotFoundException('Task not found');
+
+    // Visibility check for private pending/returned/rejected tasks
+    if (actorId && actorRoles && (task as Record<string, unknown>).approvalStatus !== 'APPROVED') {
+      await this.assertApprovalVisibility(
+        task as Record<string, unknown>,
+        actorId,
+        actorRoles,
+      );
+    }
+
     return task;
+  }
+
+  /** Check that `actorId` is allowed to see a non-approved (private) task.
+   *  Throws ForbiddenException if access is denied. */
+  private async assertApprovalVisibility(
+    task: Record<string, unknown>,
+    actorId: string,
+    actorRoles: string[],
+  ): Promise<void> {
+    const isElevated = actorRoles.some((r) => ELEVATED_ROLES.includes(r));
+    if (isElevated) return;
+    if (task['createdById'] === actorId) return;
+
+    // Workspace manager/owner can always see pending tasks
+    const wsId = task['workspaceId'] as string | null;
+    if (wsId) {
+      const memberRole = await this.workspaces.getWorkspaceMemberRole(actorId, wsId);
+      if (memberRole === 'MANAGER' || memberRole === 'OWNER') return;
+    }
+
+    throw new ForbiddenException('You do not have access to this task.');
   }
 
   async create(
@@ -226,18 +273,53 @@ export class TasksService {
     } else if (!isElevated && !hasCreatePerm) {
       throw new ForbiddenException('tasks.create permission required');
     }
-    const recurrenceInterval = dto.recurrenceInterval ?? 'NONE';
+
+    // ── Determine whether this is a MEMBER private task request (Unit 63.1) ──
+    // A task is private/pending when created by a non-elevated workspace Member.
+    // hasCreatePerm covers DEPARTMENT_MANAGER/DEPARTMENT_USER who may create official tasks.
+    const isMemberCreate = !isElevated && !hasCreatePerm && !!dto.workspaceId;
+
+    if (isMemberCreate) {
+      // Require business reason for private task requests
+      if (!dto.approvalNote?.trim()) {
+        throw new BadRequestException(
+          'Please provide a business reason (approvalNote) for your task request.',
+        );
+      }
+      // Members cannot assign to another user before approval
+      if (dto.assigneeId && dto.assigneeId !== actorId) {
+        throw new BadRequestException(
+          'Private task requests are automatically assigned to you. You cannot assign another user before the task is approved.',
+        );
+      }
+      // Members cannot create recurring private tasks before approval
+      if (dto.recurrenceInterval && dto.recurrenceInterval !== 'NONE') {
+        throw new BadRequestException(
+          'Recurrence cannot be set on a private task request. Enable recurrence after the task is approved.',
+        );
+      }
+    }
+
+    const recurrenceInterval = isMemberCreate ? 'NONE' : (dto.recurrenceInterval ?? 'NONE');
+
     // Validate: recurring tasks must have a due date
     if (recurrenceInterval !== 'NONE' && !dto.dueDate) {
       throw new BadRequestException('A due date is required for recurring tasks.');
     }
 
     // Validate assignee: must be an active workspace member (elevated actors can assign to any active user)
-    if (dto.assigneeId && dto.workspaceId) {
+    // For member creates, assigneeId is always overridden to actorId below.
+    if (!isMemberCreate && dto.assigneeId && dto.workspaceId) {
       await this.workspaces.assertCanBeAssigned(dto.assigneeId, dto.workspaceId, actorRoles);
     }
+
     // Generate a series ID if this task has recurrence; it will be inherited by all occurrences
     const recurrenceSeriesId = recurrenceInterval !== 'NONE' ? randomUUID() : null;
+
+    // Approval state: PENDING for MEMBER private requests, APPROVED for all others
+    const approvalStatus = isMemberCreate ? TaskApprovalStatus.PENDING : TaskApprovalStatus.APPROVED;
+    // For member creates: always self-assigned
+    const resolvedAssigneeId = isMemberCreate ? actorId : (dto.assigneeId ?? null);
 
     const task = await this.prisma.task.create({
       data: {
@@ -248,13 +330,15 @@ export class TasksService {
         description:        dto.description ?? null,
         priority:           dto.priority ?? 'MEDIUM',
         isReference:        dto.isReference ?? false,
-        assigneeId:         dto.assigneeId ?? null,
+        assigneeId:         resolvedAssigneeId,
         createdById:        actorId,
         dueDate:            dto.dueDate ? new Date(dto.dueDate) : null,
         status:             'TODO',
         recurrenceInterval,
         recurrenceEndDate:  dto.recurrenceEndDate ? new Date(dto.recurrenceEndDate) : null,
         recurrenceSeriesId,
+        approvalStatus,
+        approvalNote:       dto.approvalNote?.trim() ?? null,
       },
       include: TASK_INCLUDE,
     });
@@ -264,20 +348,26 @@ export class TasksService {
       action: 'CREATED',
       entityType: 'TASK',
       entityId: task.id,
-      newValue: { title: task.title, status: task.status },
+      newValue: {
+        title: task.title, status: task.status, approvalStatus,
+        privateTaskRequest: isMemberCreate,
+      },
     });
 
-    await this.recordActivity(task.id, actorId, 'CREATED', `Task created: "${task.title}"`);
+    const activitySummary = isMemberCreate
+      ? `Private task request created: "${task.title}" — awaiting reviewer approval`
+      : `Task created: "${task.title}"`;
+    await this.recordActivity(task.id, actorId, 'CREATED', activitySummary);
 
-    if (dto.assigneeId && dto.assigneeId !== actorId) {
-      // Enrich notification with workspace name and assigner name for better context
+    if (!isMemberCreate && dto.assigneeId && dto.assigneeId !== actorId) {
+      // Standard task assignment notification (only for approved tasks)
       const [ws, actorUser] = await Promise.all([
         task.workspaceId ? this.prisma.workspace.findUnique({ where: { id: task.workspaceId }, select: { name: true } }).catch(() => null) : null,
         this.prisma.user.findUnique({ where: { id: actorId }, select: { fullName: true } }).catch(() => null),
       ]);
-      const wsText    = ws?.name      ? ` in ${ws.name}`           : '';
-      const byText    = actorUser?.fullName ? ` by ${actorUser.fullName}` : '';
-      const dueText   = task.dueDate  ? ` · Due ${new Date(task.dueDate as Date).toLocaleDateString('en-GB')}` : '';
+      const wsText  = ws?.name         ? ` in ${ws.name}`              : '';
+      const byText  = actorUser?.fullName ? ` by ${actorUser.fullName}` : '';
+      const dueText = task.dueDate     ? ` · Due ${new Date(task.dueDate as Date).toLocaleDateString('en-GB')}` : '';
       await this.notifications.create({
         recipientId: dto.assigneeId,
         category:    'TASK_ASSIGNED',
@@ -289,9 +379,15 @@ export class TasksService {
       });
     }
 
+    if (isMemberCreate) {
+      // Notify workspace managers/owners that a private task awaits approval
+      await this.notifyApprovalReviewers(task.id, task.title as string, task.workspaceId, actorId).catch(() => {});
+    }
+
     try {
       this.realtime.emitToWorkspace(task.workspaceId, 'task.created', {
         id: task.id, title: task.title, status: task.status, workspaceId: task.workspaceId,
+        approvalStatus,
         createdAt: (task.createdAt as Date).toISOString(),
         updatedAt: (task.updatedAt as Date).toISOString(),
       });
@@ -300,6 +396,40 @@ export class TasksService {
     }
 
     return task;
+  }
+
+  /** Notify workspace managers/owners (and optionally super users) when a new
+   *  private task request is submitted. Fire-and-forget — failures are swallowed. */
+  private async notifyApprovalReviewers(
+    taskId: string,
+    taskTitle: string,
+    workspaceId: string,
+    creatorId: string,
+  ): Promise<void> {
+    const [ws, creator] = await Promise.all([
+      this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { name: true } }).catch(() => null),
+      this.prisma.user.findUnique({ where: { id: creatorId }, select: { fullName: true } }).catch(() => null),
+    ]);
+    const wsName      = ws?.name ?? 'the workspace';
+    const creatorName = creator?.fullName ?? 'A team member';
+    const msg = `${creatorName} added "${taskTitle}" in ${wsName}. Approval is required before it becomes an official workspace task.`;
+
+    const reviewers = await this.prisma.workspaceMember.findMany({
+      where: { workspaceId, roleInWorkspace: { in: ['MANAGER', 'OWNER'] }, user: { isActive: true } },
+      select: { userId: true },
+    });
+    for (const r of reviewers) {
+      if (r.userId === creatorId) continue;
+      await this.notifications.create({
+        recipientId: r.userId,
+        category:    'TASK_PENDING_APPROVAL',
+        title:       'New Task Awaiting Approval',
+        message:     msg,
+        entityType:  'TASK',
+        entityId:    taskId,
+        workspaceId,
+      }).catch(() => {});
+    }
   }
 
   async update(id: string, dto: UpdateTaskDto, actor: Record<string, unknown>) {
@@ -628,7 +758,8 @@ export class TasksService {
     });
     if (!task) throw new NotFoundException('Task not found');
 
-    const currentStatus = task.status as string;
+    const currentStatus    = task.status as string;
+    const taskApprovalStatus = (task as Record<string, unknown>).approvalStatus as string;
     const { newStatus, reason, source = 'API', isOverride = false } = dto;
 
     // Same status — no-op, return current state without error
@@ -659,6 +790,22 @@ export class TasksService {
     if (isElevated || canManage)  tier = 'ELEVATED';
     else if (isWsManager)         tier = 'MANAGER';
     else                          tier = 'MEMBER';
+
+    // ── 4a. Approval state guard for MEMBER tier ─────────────────────────────
+    // RETURNED: creator should edit and resubmit via resubmitTask(), not change work status
+    // REJECTED: task is closed — no work status changes allowed for non-elevated
+    if (tier === 'MEMBER') {
+      if (taskApprovalStatus === TaskApprovalStatus.RETURNED) {
+        throw new ForbiddenException(
+          'This task request was returned for correction. Edit your task details and resubmit it for review.',
+        );
+      }
+      if (taskApprovalStatus === TaskApprovalStatus.REJECTED) {
+        throw new ForbiddenException(
+          'This task request was rejected and can no longer be changed.',
+        );
+      }
+    }
 
     // ── 4. Validate transition ────────────────────────────────────────────────
     const validNext = TASK_STATUS_TRANSITIONS[tier][currentStatus] ?? [];
@@ -1161,6 +1308,301 @@ export class TasksService {
       }
       throw err;
     }
+  }
+
+  // ─── Task Approval Actions (Unit 63.1) ────────────────────────────────────────
+  // These four methods handle the reviewer workflow for private pending tasks.
+  // All require the actor to be an elevated role or workspace Manager/Owner.
+
+  private async loadPendingTask(id: string, actorId: string, actorRoles: string[]) {
+    const task = await this.prisma.task.findUnique({ where: { id } });
+    if (!task) throw new NotFoundException('Task not found');
+    await this.assertApprovalReviewerAccess(task as Record<string, unknown>, actorId, actorRoles);
+    return task;
+  }
+
+  private async assertApprovalReviewerAccess(
+    task: Record<string, unknown>,
+    actorId: string,
+    actorRoles: string[],
+  ): Promise<void> {
+    const isElevated = actorRoles.some((r) => ELEVATED_ROLES.includes(r));
+    if (isElevated) return;
+
+    const wsId = task['workspaceId'] as string | null;
+    if (!wsId) throw new ForbiddenException('You are not authorized to review this task.');
+
+    const memberRole = await this.workspaces.getWorkspaceMemberRole(actorId, wsId);
+    if (memberRole !== 'MANAGER' && memberRole !== 'OWNER') {
+      throw new ForbiddenException('Only workspace Managers, Owners, or elevated roles can approve or reject tasks.');
+    }
+
+    // Reviewers cannot approve their own task requests
+    if (task['createdById'] === actorId) {
+      throw new ForbiddenException('You cannot approve your own task request.');
+    }
+  }
+
+  /** Approve a pending task → it becomes an official workspace task. */
+  async approveTask(id: string, reviewNote: string | undefined, actorId: string, actorRoles: string[]) {
+    const task = await this.loadPendingTask(id, actorId, actorRoles);
+    const approvalStatus = (task as Record<string, unknown>).approvalStatus as string;
+    if (approvalStatus === 'APPROVED') {
+      throw new BadRequestException('This task is already approved.');
+    }
+
+    const now = new Date();
+    await this.prisma.task.update({
+      where: { id },
+      data: {
+        approvalStatus:       'APPROVED',
+        approvalReviewNote:   reviewNote?.trim() ?? null,
+        approvalReviewedAt:   now,
+        approvalReviewedById: actorId,
+      },
+    });
+
+    await this.auditLog.log({
+      actorId,
+      action: 'STATUS_CHANGED',
+      entityType: 'TASK',
+      entityId: id,
+      previousValue: { approvalStatus },
+      newValue: { approvalStatus: 'APPROVED', reviewNote: reviewNote?.trim() ?? null, privateTaskApproved: true },
+    });
+    await this.recordActivity(id, actorId, 'STATUS_CHANGED',
+      `Task request approved — "${task.title}" is now an official workspace task${reviewNote ? `. Note: ${reviewNote}` : ''}`);
+
+    // Notify creator
+    const reviewer = await this.prisma.user.findUnique({ where: { id: actorId }, select: { fullName: true } }).catch(() => null);
+    const reviewerName = reviewer?.fullName ?? 'A reviewer';
+    const creatorId = task.createdById as string;
+    await this.notifications.create({
+      recipientId: creatorId,
+      category:    'TASK_APPROVAL_APPROVED',
+      title:       'Task Approved',
+      message:     `Your task "${task.title}" was approved by ${reviewerName}.${reviewNote ? ` Note: ${reviewNote}` : ''}`,
+      entityType:  'TASK',
+      entityId:    id,
+      workspaceId: task.workspaceId as string,
+    }).catch(() => {});
+
+    try {
+      this.realtime.emitToWorkspace(task.workspaceId as string, 'task.updated', {
+        id, workspaceId: task.workspaceId, approvalStatus: 'APPROVED',
+      });
+    } catch { /* non-critical */ }
+
+    return this.findOne(id);
+  }
+
+  /** Approve and simultaneously complete a task (when work was already submitted). */
+  async approveAndCompleteTask(id: string, reviewNote: string | undefined, actorId: string, actorRoles: string[]) {
+    const task = await this.loadPendingTask(id, actorId, actorRoles);
+    const approvalStatus = (task as Record<string, unknown>).approvalStatus as string;
+    if (approvalStatus === 'APPROVED') throw new BadRequestException('This task is already approved.');
+
+    const now = new Date();
+    await this.prisma.task.update({
+      where: { id },
+      data: {
+        approvalStatus:       'APPROVED',
+        approvalReviewNote:   reviewNote?.trim() ?? null,
+        approvalReviewedAt:   now,
+        approvalReviewedById: actorId,
+        status:               'COMPLETED',
+        completedAt:          now,
+      },
+    });
+
+    await this.auditLog.log({
+      actorId,
+      action: 'STATUS_CHANGED',
+      entityType: 'TASK',
+      entityId: id,
+      previousValue: { approvalStatus, status: task.status },
+      newValue: { approvalStatus: 'APPROVED', status: 'COMPLETED', approvedAndCompleted: true, reviewNote: reviewNote?.trim() ?? null },
+    });
+    await this.recordActivity(id, actorId, 'STATUS_CHANGED',
+      `Task approved and marked complete — "${task.title}"${reviewNote ? `. Note: ${reviewNote}` : ''}`);
+
+    const approveCompleteReviewer = await this.prisma.user.findUnique({ where: { id: actorId }, select: { fullName: true } }).catch(() => null);
+    const approveCompleteReviewerName = approveCompleteReviewer?.fullName ?? 'A reviewer';
+    const creatorId = task.createdById as string;
+    await this.notifications.create({
+      recipientId: creatorId,
+      category:    'TASK_APPROVAL_APPROVED',
+      title:       'Task Approved and Completed',
+      message:     `Your task "${task.title}" was approved and marked as complete by ${approveCompleteReviewerName}.${reviewNote ? ` Note: ${reviewNote}` : ''}`,
+      entityType:  'TASK',
+      entityId:    id,
+      workspaceId: task.workspaceId as string,
+    }).catch(() => {});
+
+    try {
+      this.realtime.emitToWorkspace(task.workspaceId as string, 'task.updated', {
+        id, workspaceId: task.workspaceId, approvalStatus: 'APPROVED', status: 'COMPLETED',
+      });
+    } catch { /* non-critical */ }
+
+    return this.findOne(id);
+  }
+
+  /** Return a task request for creator correction (task stays PENDING-ish, becomes RETURNED). */
+  async returnTask(id: string, reviewNote: string, actorId: string, actorRoles: string[]) {
+    if (!reviewNote?.trim()) {
+      throw new BadRequestException('A return reason is required when returning a task request for correction.');
+    }
+    const task = await this.loadPendingTask(id, actorId, actorRoles);
+    const approvalStatus = (task as Record<string, unknown>).approvalStatus as string;
+    if (approvalStatus === 'APPROVED') throw new BadRequestException('An approved task cannot be returned.');
+
+    const now = new Date();
+    await this.prisma.task.update({
+      where: { id },
+      data: {
+        approvalStatus:       'RETURNED',
+        approvalReviewNote:   reviewNote.trim(),
+        approvalReviewedAt:   now,
+        approvalReviewedById: actorId,
+      },
+    });
+
+    await this.auditLog.log({
+      actorId,
+      action: 'STATUS_CHANGED',
+      entityType: 'TASK',
+      entityId: id,
+      previousValue: { approvalStatus },
+      newValue: { approvalStatus: 'RETURNED', reviewNote: reviewNote.trim() },
+    });
+    await this.recordActivity(id, actorId, 'STATUS_CHANGED',
+      `Task request returned for correction — "${task.title}". Reason: ${reviewNote}`);
+
+    const returnReviewer = await this.prisma.user.findUnique({ where: { id: actorId }, select: { fullName: true } }).catch(() => null);
+    const returnReviewerName = returnReviewer?.fullName ?? 'A reviewer';
+    const creatorId = task.createdById as string;
+    await this.notifications.create({
+      recipientId: creatorId,
+      category:    'TASK_APPROVAL_RETURNED',
+      title:       'Task Returned for Correction',
+      message:     `${returnReviewerName} returned "${task.title}" for correction. Reason: ${reviewNote.trim()}`,
+      entityType:  'TASK',
+      entityId:    id,
+      workspaceId: task.workspaceId as string,
+    }).catch(() => {});
+
+    try {
+      this.realtime.emitToWorkspace(task.workspaceId as string, 'task.updated', {
+        id, workspaceId: task.workspaceId, approvalStatus: 'RETURNED',
+      });
+    } catch { /* non-critical */ }
+
+    return this.findOne(id);
+  }
+
+  /** Reject a task request entirely. Creator may view but not continue working. */
+  async rejectTask(id: string, reviewNote: string, actorId: string, actorRoles: string[]) {
+    if (!reviewNote?.trim()) {
+      throw new BadRequestException('A rejection reason is required.');
+    }
+    const task = await this.loadPendingTask(id, actorId, actorRoles);
+    const approvalStatus = (task as Record<string, unknown>).approvalStatus as string;
+    if (approvalStatus === 'APPROVED') throw new BadRequestException('An approved task cannot be rejected through this endpoint.');
+
+    const now = new Date();
+    await this.prisma.task.update({
+      where: { id },
+      data: {
+        approvalStatus:       'REJECTED',
+        approvalReviewNote:   reviewNote.trim(),
+        approvalReviewedAt:   now,
+        approvalReviewedById: actorId,
+      },
+    });
+
+    await this.auditLog.log({
+      actorId,
+      action: 'STATUS_CHANGED',
+      entityType: 'TASK',
+      entityId: id,
+      previousValue: { approvalStatus },
+      newValue: { approvalStatus: 'REJECTED', reviewNote: reviewNote.trim() },
+    });
+    await this.recordActivity(id, actorId, 'STATUS_CHANGED',
+      `Task request rejected — "${task.title}". Reason: ${reviewNote}`);
+
+    const rejectReviewer = await this.prisma.user.findUnique({ where: { id: actorId }, select: { fullName: true } }).catch(() => null);
+    const rejectReviewerName = rejectReviewer?.fullName ?? 'A reviewer';
+    const creatorId = task.createdById as string;
+    await this.notifications.create({
+      recipientId: creatorId,
+      category:    'TASK_APPROVAL_REJECTED',
+      title:       'Task Rejected',
+      message:     `${rejectReviewerName} rejected "${task.title}". Reason: ${reviewNote.trim()}`,
+      entityType:  'TASK',
+      entityId:    id,
+      workspaceId: task.workspaceId as string,
+    }).catch(() => {});
+
+    try {
+      this.realtime.emitToWorkspace(task.workspaceId as string, 'task.updated', {
+        id, workspaceId: task.workspaceId, approvalStatus: 'REJECTED',
+      });
+    } catch { /* non-critical */ }
+
+    return this.findOne(id);
+  }
+
+  /** Creator resubmits a RETURNED task — approvalStatus goes back to PENDING. */
+  async resubmitTask(id: string, actorId: string, actorRoles: string[]) {
+    const task = await this.prisma.task.findUnique({ where: { id } });
+    if (!task) throw new NotFoundException('Task not found');
+    const approvalStatus = (task as Record<string, unknown>).approvalStatus as string;
+
+    if (approvalStatus !== 'RETURNED') {
+      throw new BadRequestException('Only RETURNED tasks can be resubmitted.');
+    }
+
+    // Only the creator can resubmit
+    const isCreator  = task.createdById === actorId;
+    const isElevated = actorRoles.some((r) => ELEVATED_ROLES.includes(r));
+    if (!isCreator && !isElevated) {
+      throw new ForbiddenException('Only the task creator can resubmit a returned request.');
+    }
+
+    await this.prisma.task.update({
+      where: { id },
+      data: {
+        approvalStatus:       'PENDING',
+        approvalReviewNote:   null,
+        approvalReviewedAt:   null,
+        approvalReviewedById: null,
+        approvalNote:         (task as Record<string, unknown>).approvalNote as string | null,
+      },
+    });
+
+    await this.auditLog.log({
+      actorId,
+      action: 'STATUS_CHANGED',
+      entityType: 'TASK',
+      entityId: id,
+      previousValue: { approvalStatus: 'RETURNED' },
+      newValue: { approvalStatus: 'PENDING', resubmitted: true },
+    });
+    await this.recordActivity(id, actorId, 'STATUS_CHANGED',
+      `Task request resubmitted for review — "${task.title}"`);
+
+    // Re-notify workspace managers/owners
+    await this.notifyApprovalReviewers(id, task.title as string, task.workspaceId as string, actorId).catch(() => {});
+
+    try {
+      this.realtime.emitToWorkspace(task.workspaceId as string, 'task.updated', {
+        id, workspaceId: task.workspaceId, approvalStatus: 'PENDING',
+      });
+    } catch { /* non-critical */ }
+
+    return this.findOne(id);
   }
 
   async addComment(taskId: string, dto: CreateCommentDto, actorId: string) {

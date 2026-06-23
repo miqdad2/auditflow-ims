@@ -26,7 +26,7 @@ import type {
 } from '@/features/workspaces/types';
 
 type WorkspaceTab = 'overview' | 'tasks' | 'members' | 'activity' | 'documents' | 'ncr';
-type TaskFilter = 'all' | 'mine' | 'overdue' | 'unassigned' | 'waiting_review' | 'returned' | 'reference' | 'completed';
+type TaskFilter = 'all' | 'mine' | 'overdue' | 'unassigned' | 'waiting_review' | 'returned' | 'reference' | 'completed' | 'pending_approval';
 
 interface WorkspaceMember {
   id: string;
@@ -252,7 +252,13 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
   const canDeleteTask    = user?.permissions?.includes('tasks.delete') ?? false;
 
   // Fine-grained action permissions — used to show/hide UI controls accurately (Part 15-17, 19)
-  const canCreateTask      = (user?.permissions?.includes('tasks.create') ?? false) || isElevatedAccess || canManageWs;
+  // canCreateOfficialTask: elevated/manager path — task goes live immediately with full options
+  const canCreateOfficialTask = (user?.permissions?.includes('tasks.create') ?? false) || isElevatedAccess || canManageWs;
+  // canCreatePendingTask: workspace MEMBER path — task is created PENDING and goes live after approval
+  const canCreatePendingTask  = myWsRole === 'MEMBER' && !isElevatedAccess;
+  // canAddTask: combined gate for the Add Task button (both paths lead to same modal)
+  const canAddTask             = canCreateOfficialTask || canCreatePendingTask;
+  const canCreateTask          = canCreateOfficialTask; // retained for reference-items / task-list features
   const canCreateTaskList  = (user?.permissions?.includes('project.create') ?? false) || isElevatedAccess || canManageWs;
   const canUploadDocument  = (user?.permissions?.includes('documents.create') ?? false) || isElevatedAccess;
   const canCreateIssue     = (user?.permissions?.includes('ncr.create') ?? false) || isElevatedAccess;
@@ -441,7 +447,8 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
     if (taskFilter === 'completed')      list = list.filter((t) => t.status === 'COMPLETED');
     if (taskFilter === 'waiting_review') list = list.filter((t) => t.status === 'WAITING_REVIEW');
     if (taskFilter === 'returned')       list = list.filter((t) => t.status === 'REJECTED');
-    if (taskFilter === 'reference')      list = list.filter((t) => t.isReference === true);
+    if (taskFilter === 'reference')        list = list.filter((t) => t.isReference === true);
+    if (taskFilter === 'pending_approval') list = list.filter((t) => t.approvalStatus === 'PENDING');
     if (taskSearch.trim()) list = list.filter((t) => t.title.toLowerCase().includes(taskSearch.toLowerCase()));
     // Apply sort — manual = preserve sortOrder from backend
     if (taskSort === 'newest-created')   return [...list].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -459,7 +466,8 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
     if (f === 'completed')      return tasks.filter((t) => t.status === 'COMPLETED').length;
     if (f === 'waiting_review') return tasks.filter((t) => t.status === 'WAITING_REVIEW').length;
     if (f === 'returned')       return tasks.filter((t) => t.status === 'REJECTED').length;
-    if (f === 'reference')      return tasks.filter((t) => t.isReference === true).length;
+    if (f === 'reference')        return tasks.filter((t) => t.isReference === true).length;
+    if (f === 'pending_approval') return tasks.filter((t) => t.approvalStatus === 'PENDING').length;
     return tasks.length;
   }
 
@@ -1000,7 +1008,7 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                 <div className="absolute right-0 top-full z-30 mt-1 overflow-hidden rounded-xl shadow-lg"
                   style={{ backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-default)', minWidth: '205px' }}>
                   {([
-                    ...(canCreateTask && selectedListId ? [{ label: 'Add Task', Icon: CheckSquare, act: () => { setActiveTab('tasks'); setShowCreateTask(true); setShowQuickAdd(false); } }] : []),
+                    ...(canAddTask && selectedListId ? [{ label: 'Add Task', Icon: CheckSquare, act: () => { setActiveTab('tasks'); setShowCreateTask(true); setShowQuickAdd(false); } }] : []),
                     ...(canCreateTask && selectedListId ? [{ label: 'Add Reference Item', Icon: FileText, act: () => { setActiveTab('tasks'); setShowCreateTask(true); setShowQuickAdd(false); } }] : []),
                     ...(canCreateTaskList ? [{ label: 'Add Task List', Icon: ListTodo, act: () => { setActiveTab('tasks'); setShowCreateList(true); setShowQuickAdd(false); } }] : []),
                     ...(canUploadDocument ? [{ label: 'Upload Document', Icon: FileCheck, act: () => { setActiveTab('documents'); setShowQuickAdd(false); } }] : []),
@@ -2282,7 +2290,7 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                       <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{selectedList.description}</p>
                     )}
                   </div>
-                  {canCreateTask && (
+                  {canAddTask && (
                     <button type="button" onClick={() => setShowCreateTask(true)}
                       className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-white"
                       style={{ backgroundColor: 'var(--accent-primary)' }}>
@@ -2295,15 +2303,16 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                 <div className="flex items-center gap-2 flex-wrap border-b px-4 py-2"
                   style={{ borderColor: 'var(--border-subtle)' }}>
                   {([
-                    { key: 'all',           label: 'All' },
-                    { key: 'mine',          label: 'My Tasks' },
-                    { key: 'unassigned',    label: 'Unassigned' },
-                    { key: 'overdue',       label: 'Overdue' },
-                    { key: 'waiting_review',label: 'In Review' },
-                    { key: 'returned',      label: 'Returned' },
-                    { key: 'reference',     label: 'Reference Only' },
-                    { key: 'completed',     label: 'Completed' },
-                  ] as const).map((f) => {
+                    { key: 'all',             label: 'All',              show: true },
+                    { key: 'mine',            label: 'My Tasks',         show: true },
+                    { key: 'pending_approval',label: 'Pending Approval', show: canManageWs },
+                    { key: 'unassigned',      label: 'Unassigned',       show: true },
+                    { key: 'overdue',         label: 'Overdue',          show: true },
+                    { key: 'waiting_review',  label: 'In Review',        show: true },
+                    { key: 'returned',        label: 'Returned',         show: true },
+                    { key: 'reference',       label: 'Reference Only',   show: true },
+                    { key: 'completed',       label: 'Completed',        show: true },
+                  ] as Array<{ key: TaskFilter; label: string; show: boolean }>).filter((f) => f.show).map((f) => {
                     const count = filterCount(f.key);
                     const active = taskFilter === f.key;
                     return (
@@ -2375,7 +2384,7 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                               ? 'No tasks match the current filter.'
                               : 'No tasks have been added to this list.'}
                       </p>
-                      {!taskSearch && taskFilter === 'all' && canCreateTask && (
+                      {!taskSearch && taskFilter === 'all' && canAddTask && (
                         <button type="button" onClick={() => setShowCreateTask(true)}
                           className="mt-1 flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-white"
                           style={{ backgroundColor: 'var(--accent-primary)' }}>
@@ -2410,6 +2419,27 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                                   <span className="shrink-0 inline-flex rounded-full px-1.5 py-0.5 text-[9px] font-medium"
                                     style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent-primary)', border: '1px solid var(--accent-primary)', lineHeight: 1.4 }}>
                                     Ref
+                                  </span>
+                                )}
+                                {task.approvalStatus === 'PENDING' && (
+                                  <span className="shrink-0 inline-flex rounded-full px-1.5 py-0.5 text-[9px] font-medium"
+                                    title="Pending approval"
+                                    style={{ backgroundColor: 'var(--state-warning-soft)', color: 'var(--state-warning)', border: '1px solid var(--state-warning)', lineHeight: 1.4 }}>
+                                    Pending Approval
+                                  </span>
+                                )}
+                                {task.approvalStatus === 'RETURNED' && (
+                                  <span className="shrink-0 inline-flex rounded-full px-1.5 py-0.5 text-[9px] font-medium"
+                                    title="Returned for correction"
+                                    style={{ backgroundColor: 'var(--state-warning-soft)', color: 'var(--state-warning)', border: '1px solid var(--state-warning)', lineHeight: 1.4 }}>
+                                    Returned
+                                  </span>
+                                )}
+                                {task.approvalStatus === 'REJECTED' && (
+                                  <span className="shrink-0 inline-flex rounded-full px-1.5 py-0.5 text-[9px] font-medium"
+                                    title="Task request rejected"
+                                    style={{ backgroundColor: 'var(--state-error-soft)', color: 'var(--state-error)', border: '1px solid var(--state-error)', lineHeight: 1.4 }}>
+                                    Rejected
                                   </span>
                                 )}
                                 {task.recurrenceInterval && task.recurrenceInterval !== 'NONE' && (
@@ -2571,6 +2601,9 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
               if (!prev) return null;
               return { ...prev, taskLists: prev.taskLists.map((tl) => tl.id === selectedListId ? { ...tl, _count: { tasks: tl._count.tasks + 1 } } : tl) };
             });
+            if (task.approvalStatus === 'PENDING') {
+              showToast('Task created and submitted for approval.');
+            }
             setShowCreateTask(false);
           }} />
       )}
