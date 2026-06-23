@@ -370,9 +370,9 @@ export default function DashboardPage() {
     attentionItems.push({ label: 'Expired task files', count: taskFileSummary!.expired, href: '/action-center', urgent: true });
 
   // ─── Header ──────────────────────────────────────────────────────────────────
-  const headerTitle    = isSuperRole || isElevated ? 'Business Control Center' : 'My Dashboard';
+  const headerTitle    = isSuperRole || isElevated ? 'Operations Control Center' : 'My Dashboard';
   const headerSubtitle = isSuperRole
-    ? 'Monitor workspaces, tasks, documents, issues, and expiring files.'
+    ? 'Monitor workspaces, tasks, documents, issues, approvals, and expiring files.'
     : isElevated
     ? `Welcome back, ${user?.fullName ?? 'User'}.${user?.department ? ` · ${user.department.name}` : ''}`
     : `Welcome back, ${user?.fullName ?? 'User'}.${user?.department ? ` · ${user.department.name}` : ''}`;
@@ -382,7 +382,7 @@ export default function DashboardPage() {
     <div className="flex items-start justify-between gap-4">
       <div>
         <p className="text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-          {isSuperRole || isElevated ? 'BUSINESS OPERATIONS OVERVIEW' : 'MY DASHBOARD'}
+          {isSuperRole || isElevated ? 'OPERATIONS OVERVIEW' : 'MY DASHBOARD'}
         </p>
         <h1 className="mt-1 text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>{headerTitle}</h1>
         <p className="mt-1 text-sm" style={{ color: 'var(--text-muted)' }}>{headerSubtitle}</p>
