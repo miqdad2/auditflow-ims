@@ -5,8 +5,8 @@ import Link from 'next/link';
 import {
   RefreshCw, Wifi, WifiOff, AlertTriangle, CheckCircle2,
   TrendingUp, TrendingDown, Activity, Clock, FileText,
-  Users, Shield, ChevronRight, Building2, Loader2,
-  AlertCircle, Lock,
+  Shield, ChevronRight, Building2, Loader2,
+  AlertCircle, Lock, Target,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { apiGet, ApiError } from '@/lib/api';
@@ -14,17 +14,17 @@ import { useSocket } from '@/lib/socket-provider';
 import { useRealtimeInvalidation } from '@/lib/use-realtime-invalidation';
 import { useRouter } from 'next/navigation';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Types (unchanged from Units 65–65.3) ────────────────────────────────────
 
 interface ExecutiveSummary {
-  complianceHealth: number | null;  // null = N/A (no measurable data)
+  complianceHealth: number | null;
   activeWorkspaces: number;
   criticalIssues: number;
   overdueActions: number;
   pendingDecisionsCount: number;
   expiringFiles: number;
   tasksAwaitingReview: number;
-  completionRate: number | null;    // null = N/A (no tasks)
+  completionRate: number | null;
 }
 
 interface AttentionItem {
@@ -67,15 +67,15 @@ interface Trends {
   completedThisWeek: number;
   completedLastWeek: number;
   weeklyTrend: number | null;
-  evidenceReadiness: number | null;   // null = N/A
-  docApprovalRate: number | null;     // null = N/A
-  ncrResolutionRate: number | null;   // null = N/A
+  evidenceReadiness: number | null;
+  docApprovalRate: number | null;
+  ncrResolutionRate: number | null;
 }
 
 interface DeptPerformance {
   departmentId: string;
   departmentName: string;
-  completionRate: number | null;  // null = N/A
+  completionRate: number | null;
   overdueCount: number;
   issueCount: number;
 }
@@ -100,25 +100,64 @@ interface ExecutiveData {
   generatedAt: string;
 }
 
-// No elevated-role check — access is controlled by dashboardExperience === EXECUTIVE.
+// ─── Realtime events (unchanged) ─────────────────────────────────────────────
+const EXEC_EVENTS = [
+  'task.created', 'task.updated', 'task.deleted',
+  'document.updated',
+  'issue.created', 'issue.updated',
+  'file.updated',
+  'workspace.updated',
+  'notification.created',
+] as const;
 
-// ─── Helper: health color ─────────────────────────────────────────────────────
+// ─── Design system helpers ────────────────────────────────────────────────────
+
+type KpiStatus = 'success' | 'warning' | 'error' | 'info' | 'neutral';
+
+function kpiStyle(status: KpiStatus): { accent: string; iconBg: string; iconColor: string } {
+  switch (status) {
+    case 'success': return { accent: 'var(--state-success)', iconBg: 'var(--state-success-soft)', iconColor: 'var(--state-success)' };
+    case 'warning': return { accent: 'var(--state-warning)', iconBg: 'var(--state-warning-soft)', iconColor: 'var(--state-warning)' };
+    case 'error':   return { accent: 'var(--state-error)',   iconBg: 'var(--state-error-soft)',   iconColor: 'var(--state-error)'   };
+    case 'info':    return { accent: 'var(--accent-primary)', iconBg: 'var(--accent-soft)',        iconColor: 'var(--accent-primary)' };
+    default:        return { accent: 'var(--border-strong)', iconBg: 'var(--bg-muted)',            iconColor: 'var(--text-muted)'    };
+  }
+}
+
+export function metricStatus(v: number | null, good = 80, warn = 60): KpiStatus {
+  if (v === null) return 'neutral';
+  if (v >= good)  return 'success';
+  if (v >= warn)  return 'warning';
+  return 'error';
+}
+
 function healthColor(health: string): { color: string; bg: string } {
   switch (health) {
-    case 'ON_TRACK':  return { color: 'var(--state-success)',  bg: 'var(--state-success-soft)' };
-    case 'ATTENTION': return { color: 'var(--state-warning)',  bg: 'var(--state-warning-soft)' };
-    case 'AT_RISK':   return { color: '#d97706',               bg: '#fef3c7' };
-    case 'CRITICAL':  return { color: 'var(--state-error)',    bg: 'var(--state-error-soft)' };
-    default:          return { color: 'var(--text-muted)',     bg: 'var(--bg-muted)' };
+    case 'ON_TRACK':  return { color: 'var(--state-success)', bg: 'var(--state-success-soft)' };
+    case 'ATTENTION': return { color: 'var(--state-warning)', bg: 'var(--state-warning-soft)' };
+    case 'AT_RISK':   return { color: 'var(--state-warning)', bg: 'var(--state-warning-soft)' };
+    case 'CRITICAL':  return { color: 'var(--state-error)',   bg: 'var(--state-error-soft)'   };
+    default:          return { color: 'var(--text-muted)',    bg: 'var(--bg-muted)'            };
   }
 }
 
 function severityColor(sev: string): { color: string; bg: string } {
   switch (sev) {
-    case 'CRITICAL': return { color: 'var(--state-error)',   bg: 'var(--state-error-soft)' };
-    case 'HIGH':     return { color: '#d97706',              bg: '#fef3c7' };
-    default:         return { color: 'var(--text-muted)',    bg: 'var(--bg-muted)' };
+    case 'CRITICAL': return { color: 'var(--state-error)',   bg: 'var(--state-error-soft)'   };
+    case 'HIGH':     return { color: 'var(--state-warning)', bg: 'var(--state-warning-soft)' };
+    default:         return { color: 'var(--text-muted)',    bg: 'var(--bg-muted)'            };
   }
+}
+
+export function fmtMetric(v: number | null, suffix = ''): string {
+  return v === null ? 'N/A' : `${v}${suffix}`;
+}
+
+export function formatAction(action: string): string {
+  return action
+    .toLowerCase()
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function timeAgo(iso: string): string {
@@ -137,69 +176,194 @@ function fmtDate(iso: string | null | undefined): string {
   return new Date(iso).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-// ─── Realtime events ──────────────────────────────────────────────────────────
-const EXEC_EVENTS = [
-  'task.created', 'task.updated', 'task.deleted',
-  'document.updated',
-  'issue.created', 'issue.updated',
-  'file.updated',
-  'workspace.updated',
-  'notification.created',
-] as const;
+// ─── Executive Summary strip builder ─────────────────────────────────────────
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
-function fmtMetric(v: number | null, suffix = ''): string {
-  return v === null ? 'N/A' : `${v}${suffix}`;
-}
+interface SummaryItem { label: string; value: string; color: string }
 
-function metricColor(v: number | null, good = 80, warn = 60): string {
-  if (v === null) return 'var(--text-muted)';
-  if (v >= good)  return 'var(--state-success)';
-  if (v >= warn)  return '#d97706';
-  return 'var(--state-error)';
+export function buildExecSummary(data: {
+  summary: ExecutiveSummary;
+  attentionItems: Pick<AttentionItem, 'title' | 'severity'>[];
+  organizationHealth: Pick<OrgHealthRow, 'health' | 'workspaceName'>[];
+  trends: Pick<Trends, 'weeklyTrend'>;
+  pendingDecisions: unknown[];
+}): SummaryItem[] {
+  const { summary, attentionItems, organizationHealth, trends, pendingDecisions } = data;
+  const items: SummaryItem[] = [];
+
+  // Overall Status — derived from real KPI data
+  let status = 'On Track';
+  let statusColor = 'var(--state-success)';
+  if (summary.criticalIssues > 0 || (summary.complianceHealth !== null && summary.complianceHealth < 60)) {
+    status = 'At Risk'; statusColor = 'var(--state-error)';
+  } else if (
+    summary.overdueActions > 0 ||
+    attentionItems.length > 0 ||
+    (summary.complianceHealth !== null && summary.complianceHealth < 80)
+  ) {
+    status = 'Attention Required'; statusColor = 'var(--state-warning)';
+  } else if (summary.complianceHealth === null && summary.activeWorkspaces > 0) {
+    status = 'Awaiting Data'; statusColor = 'var(--text-muted)';
+  }
+  items.push({ label: 'Overall Status', value: status, color: statusColor });
+
+  // Highest Risk Workspace — only shown when CRITICAL or AT_RISK workspace exists
+  const critWs = organizationHealth.find((r) => r.health === 'CRITICAL');
+  const riskWs = critWs ?? organizationHealth.find((r) => r.health === 'AT_RISK');
+  if (riskWs) {
+    items.push({
+      label: 'Highest Risk',
+      value: riskWs.workspaceName,
+      color: critWs ? 'var(--state-error)' : 'var(--state-warning)',
+    });
+  }
+
+  // Most Urgent — first attention item, else pending decisions count
+  const urgent = attentionItems[0];
+  if (urgent) {
+    const truncated = urgent.title.length > 42 ? `${urgent.title.slice(0, 42)}…` : urgent.title;
+    items.push({
+      label: 'Most Urgent',
+      value: truncated,
+      color: urgent.severity === 'CRITICAL' ? 'var(--state-error)' : 'var(--state-warning)',
+    });
+  } else if (pendingDecisions.length > 0) {
+    const n = pendingDecisions.length;
+    items.push({
+      label: 'Most Urgent',
+      value: `${n} decision${n > 1 ? 's' : ''} awaiting review`,
+      color: 'var(--state-warning)',
+    });
+  }
+
+  // Current Trend — only when comparison data is available
+  if (trends.weeklyTrend !== null) {
+    const t = trends.weeklyTrend;
+    items.push({
+      label: 'Current Trend',
+      value: t > 0 ? `Improving (+${t}%)` : t < 0 ? `Declining (${t}%)` : 'Stable',
+      color: t > 0 ? 'var(--state-success)' : t < 0 ? 'var(--state-error)' : 'var(--text-secondary)',
+    });
+  }
+
+  return items;
 }
 
 // ─── KPI Card ─────────────────────────────────────────────────────────────────
+
 function KpiCard({
-  label, value, subtext, color, icon: Icon, trend,
+  label, value, subtext, status, icon: Icon, trend, reducedMotion,
 }: {
   label: string;
   value: string | number | null;
   subtext?: string;
-  color?: string;
+  status: KpiStatus;
   icon: React.ElementType;
   trend?: number | null;
+  reducedMotion: boolean;
 }) {
-  const displayValue = value === null ? 'N/A' : value;
-  const displayColor = value === null ? 'var(--text-disabled)' : (color ?? 'var(--text-primary)');
+  const isNull = value === null;
+  const s = kpiStyle(isNull ? 'neutral' : status);
+
   return (
     <div
-      className="rounded-xl border p-4 flex flex-col gap-3"
-      style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}
+      className={`rounded-xl border shadow-sm p-4 flex flex-col gap-3 overflow-hidden ${reducedMotion ? '' : 'hover:shadow-md'}`}
+      style={{
+        backgroundColor: 'var(--bg-surface)',
+        borderColor: 'var(--border-default)',
+        borderLeft: `3px solid ${s.accent}`,
+        transition: reducedMotion ? 'none' : 'box-shadow 0.15s ease',
+      }}
     >
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>{label}</span>
-        <Icon className="h-4 w-4" style={{ color: displayColor }} />
+      <div className="flex items-start justify-between gap-2">
+        <span
+          className="text-[10px] font-bold uppercase tracking-widest leading-snug"
+          style={{ color: 'var(--text-muted)' }}
+        >
+          {label}
+        </span>
+        <div
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
+          style={{ backgroundColor: s.iconBg }}
+        >
+          <Icon className="h-3.5 w-3.5" style={{ color: s.iconColor }} />
+        </div>
       </div>
       <div>
-        <div className="text-2xl font-bold" style={{ color: displayColor }}>
-          {displayValue}
+        <div
+          className="text-[28px] font-bold leading-none tracking-tight"
+          style={{ color: isNull ? 'var(--text-disabled)' : s.accent }}
+        >
+          {isNull ? 'N/A' : value}
         </div>
-        {value === null ? (
-          <p className="mt-1 text-[10px]" style={{ color: 'var(--text-disabled)' }}>No measurable data</p>
-        ) : (subtext || (trend !== null && trend !== undefined)) ? (
-          <div className="mt-1 flex items-center gap-2">
-            {subtext && <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{subtext}</span>}
+        {isNull ? (
+          <p className="mt-1.5 text-[10px]" style={{ color: 'var(--text-disabled)' }}>
+            No measurable data
+          </p>
+        ) : (
+          <div className="mt-1.5 flex items-center gap-2">
+            {subtext && (
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{subtext}</span>
+            )}
             {trend !== null && trend !== undefined && (
-              <span className="flex items-center gap-0.5 text-xs font-medium"
-                style={{ color: trend >= 0 ? 'var(--state-success)' : 'var(--state-error)' }}>
-                {trend >= 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
-                {Math.abs(trend)}% vs last week
+              <span
+                className="flex items-center gap-0.5 text-[11px] font-semibold"
+                style={{ color: trend >= 0 ? 'var(--state-success)' : 'var(--state-error)' }}
+              >
+                {trend >= 0
+                  ? <TrendingUp className="h-3 w-3" />
+                  : <TrendingDown className="h-3 w-3" />}
+                {Math.abs(trend)}%
               </span>
             )}
           </div>
-        ) : null}
+        )}
       </div>
+    </div>
+  );
+}
+
+// ─── Compact empty state ──────────────────────────────────────────────────────
+
+function CompactEmpty({
+  icon: Icon, message,
+}: { icon: React.ElementType; message: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-2 py-6">
+      <Icon className="h-5 w-5" style={{ color: 'var(--text-disabled)' }} />
+      <p className="text-xs text-center max-w-xs" style={{ color: 'var(--text-muted)' }}>
+        {message}
+      </p>
+    </div>
+  );
+}
+
+// ─── Section header ───────────────────────────────────────────────────────────
+
+function SectionHeader({ title, subtitle, count, countColor }: {
+  title: string;
+  subtitle?: string;
+  count?: number;
+  countColor?: string;
+}) {
+  return (
+    <div
+      className="flex items-start justify-between gap-4 px-5 py-3.5"
+      style={{ borderBottom: '1px solid var(--border-default)', backgroundColor: 'var(--bg-subtle)' }}
+    >
+      <div>
+        <h2 className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>{title}</h2>
+        {subtitle && (
+          <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>{subtitle}</p>
+        )}
+      </div>
+      {count !== undefined && (
+        <span
+          className="shrink-0 text-[11px] font-bold px-2 py-0.5 rounded-full"
+          style={{ backgroundColor: countColor ? `${countColor}20` : 'var(--bg-muted)', color: countColor ?? 'var(--text-muted)' }}
+        >
+          {count}
+        </span>
+      )}
     </div>
   );
 }
@@ -211,13 +375,27 @@ export default function ExecutiveDashboardPage() {
   const { user, token, isLoading } = useAuth();
   const { connected } = useSocket();
 
-  const [data, setData]         = useState<ExecutiveData | null>(null);
-  const [loading, setLoading]   = useState(true);
-  const [error, setError]       = useState<string | null>(null);
+  const [data, setData]               = useState<ExecutiveData | null>(null);
+  const [loading, setLoading]         = useState(true);
+  const [error, setError]             = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string>('');
-  const fetchingRef = useRef(false);
+  const [highlighted, setHighlighted] = useState(false);
+  const [reducedMotion, setReducedMotion] = useState(false);
 
-  // ─── Access guard — dashboardExperience only, no role requirement ────────
+  const fetchingRef    = useRef(false);
+  const isInitialLoad  = useRef(true);
+  const reducedMotionRef = useRef(false);
+  const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const rm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    reducedMotionRef.current = rm;
+    setReducedMotion(rm);
+    return () => {
+      if (highlightTimer.current) clearTimeout(highlightTimer.current);
+    };
+  }, []);
+
   const isExecutive = user?.dashboardExperience === 'EXECUTIVE';
 
   useEffect(() => {
@@ -226,16 +404,22 @@ export default function ExecutiveDashboardPage() {
     if (user.mustChangePassword) { router.replace('/change-password'); return; }
   }, [user, isLoading, router]);
 
-  // ─── Data fetching ────────────────────────────────────────────────────────
   const fetchData = useCallback(async () => {
     if (!token || fetchingRef.current) return;
     fetchingRef.current = true;
-    setLoading((prev) => prev);
     try {
       const result = await apiGet<ExecutiveData>('/dashboard/executive', token);
       setData(result);
-      setLastUpdated(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kuwait' }));
+      setLastUpdated(
+        new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kuwait' }),
+      );
       setError(null);
+      if (!isInitialLoad.current && !reducedMotionRef.current) {
+        setHighlighted(true);
+        if (highlightTimer.current) clearTimeout(highlightTimer.current);
+        highlightTimer.current = setTimeout(() => setHighlighted(false), 1500);
+      }
+      isInitialLoad.current = false;
     } catch (err) {
       if (err instanceof ApiError && err.statusCode === 403) {
         setError('access_denied');
@@ -250,14 +434,9 @@ export default function ExecutiveDashboardPage() {
 
   useEffect(() => { void fetchData(); }, [fetchData]);
 
-  // ─── Realtime invalidation ────────────────────────────────────────────────
-  useRealtimeInvalidation({
-    events: EXEC_EVENTS,
-    onInvalidate: fetchData,
-    debounceMs: 1000,
-  });
+  useRealtimeInvalidation({ events: EXEC_EVENTS, onInvalidate: fetchData, debounceMs: 1000 });
 
-  // ─── Loading ──────────────────────────────────────────────────────────────
+  // ─── Loading ────────────────────────────────────────────────────────────────
   if (isLoading || (!data && loading)) {
     return (
       <div className="flex h-64 items-center justify-center">
@@ -266,7 +445,7 @@ export default function ExecutiveDashboardPage() {
     );
   }
 
-  // ─── Access denied — Standard users navigating here directly ────────────
+  // ─── Access denied ───────────────────────────────────────────────────────────
   if (error === 'access_denied' || (!isLoading && user && !isExecutive)) {
     return (
       <div className="flex h-64 flex-col items-center justify-center gap-3">
@@ -284,7 +463,7 @@ export default function ExecutiveDashboardPage() {
     );
   }
 
-  // ─── Error state ──────────────────────────────────────────────────────────
+  // ─── Error ───────────────────────────────────────────────────────────────────
   if (error && error !== 'access_denied') {
     return (
       <div className="flex h-64 flex-col items-center justify-center gap-3">
@@ -302,54 +481,84 @@ export default function ExecutiveDashboardPage() {
   if (!data) return null;
 
   const { summary, attentionItems, organizationHealth, pendingDecisions, trends, departmentPerformance, significantActivity } = data;
-
-  // ─── Zero-workspace state ─────────────────────────────────────────────────
-  // When no accessible workspaces: render only the premium empty state.
-  // Do NOT render KPI cards or sections — they would show misleading zeros.
   const hasNoWorkspaceAccess = summary.activeWorkspaces === 0 && organizationHealth.length === 0;
   const canManageUsers = user?.permissions?.includes('users.manage') ?? false;
+  const summaryItems = hasNoWorkspaceAccess ? [] : buildExecSummary(data);
+
+  // KPI statuses
+  const compStatus      = metricStatus(summary.complianceHealth);
+  const critStatus: KpiStatus   = summary.criticalIssues > 0 ? 'error'   : 'success';
+  const overdueStatus: KpiStatus = summary.overdueActions > 0 ? 'warning' : 'success';
+  const pendingStatus: KpiStatus = summary.pendingDecisionsCount > 0 ? 'warning' : 'neutral';
+  const expiryStatus: KpiStatus  = summary.expiringFiles > 0 ? 'error'   : 'success';
+  const awaitStatus: KpiStatus   = summary.tasksAwaitingReview > 0 ? 'warning' : 'neutral';
+  const rateStatus      = metricStatus(summary.completionRate, 70, 40);
 
   return (
-    <div className="flex flex-col gap-6 pb-12">
+    <div className="flex flex-col gap-5 pb-12">
 
-      {/* ── Header ──────────────────────────────────────────────────────────── */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold" style={{ color: 'var(--text-primary)' }}>
-            Executive Operations &amp; Compliance Overview
-          </h1>
-          {!hasNoWorkspaceAccess && (
-            <p className="mt-0.5 text-sm" style={{ color: 'var(--text-muted)' }}>
-              Real-time visibility into organizational performance, compliance risks, pending decisions, and operational priorities.
-            </p>
-          )}
-        </div>
-        <div className="flex shrink-0 items-center gap-3">
-          <div className="flex items-center gap-1.5 text-xs" style={{ color: connected ? 'var(--state-success)' : 'var(--state-error)' }}>
-            {connected ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
-            {connected ? 'Live' : 'Reconnecting…'}
+      {/* ── Premium Header Card ────────────────────────────────────────────────── */}
+      <div
+        className="rounded-xl border shadow-sm overflow-hidden"
+        style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}
+      >
+        <div className="px-6 py-5" style={{ borderLeft: '4px solid var(--sidebar-bg)' }}>
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 mb-1 flex-wrap">
+                <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
+                  RECAFCO AuditFlow IMS
+                </span>
+                <span
+                  className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold"
+                  style={{
+                    backgroundColor: connected ? 'var(--state-success-soft)' : 'var(--state-error-soft)',
+                    color: connected ? 'var(--state-success)' : 'var(--state-error)',
+                  }}
+                >
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${connected && !reducedMotion ? 'animate-pulse' : ''}`}
+                    style={{ backgroundColor: connected ? 'var(--state-success)' : 'var(--state-error)' }}
+                  />
+                  {connected ? 'Live' : 'Reconnecting'}
+                </span>
+              </div>
+              <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>
+                Executive Operations &amp; Compliance Overview
+              </h1>
+              {!hasNoWorkspaceAccess && (
+                <p className="mt-0.5 text-sm" style={{ color: 'var(--text-muted)', maxWidth: '70ch' }}>
+                  Real-time visibility into organizational performance, compliance risks, pending decisions, and operational priorities.
+                </p>
+              )}
+            </div>
+            <div className="flex shrink-0 flex-col items-end gap-2">
+              {lastUpdated && (
+                <span className="text-xs" style={{ color: 'var(--text-disabled)' }}>
+                  Updated {lastUpdated}
+                </span>
+              )}
+              <button
+                onClick={() => void fetchData()}
+                disabled={loading}
+                className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium disabled:opacity-50 hover:bg-slate-50 transition-colors"
+                style={{ borderColor: 'var(--border-strong)', color: 'var(--text-secondary)' }}
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
+            </div>
           </div>
-          {lastUpdated && (
-            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Updated {lastUpdated}</span>
-          )}
-          <button
-            onClick={() => void fetchData()}
-            disabled={loading}
-            className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm disabled:opacity-60"
-            style={{ borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
-          </button>
         </div>
       </div>
 
-      {/* ── No-workspace premium empty state ────────────────────────────────── */}
+      {/* ── No-workspace premium empty state ──────────────────────────────────── */}
       {hasNoWorkspaceAccess && (
-        <div className="rounded-xl border p-10 flex flex-col items-center gap-4 text-center"
-          style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
-          <div className="flex h-14 w-14 items-center justify-center rounded-full"
-            style={{ backgroundColor: 'var(--bg-muted)' }}>
+        <div
+          className="rounded-xl border shadow-sm p-10 flex flex-col items-center gap-4 text-center"
+          style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}
+        >
+          <div className="flex h-14 w-14 items-center justify-center rounded-full" style={{ backgroundColor: 'var(--bg-muted)' }}>
             <Building2 className="h-7 w-7" style={{ color: 'var(--text-muted)' }} />
           </div>
           <div>
@@ -376,354 +585,451 @@ export default function ExecutiveDashboardPage() {
         </div>
       )}
 
-      {/* ── KPI Cards (hidden when no workspace access) ─────────────────────── */}
       {!hasNoWorkspaceAccess && (
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <KpiCard
-          label="Compliance Health"
-          value={summary.complianceHealth !== null ? `${summary.complianceHealth}%` : null}
-          icon={Shield}
-          color={metricColor(summary.complianceHealth)}
-          subtext={summary.complianceHealth !== null ? 'Evidence + Docs + NCR' : undefined}
-        />
-        <KpiCard
-          label="Active Workspaces"
-          value={summary.activeWorkspaces}
-          icon={Building2}
-          subtext="Currently running"
-        />
-        <KpiCard
-          label="Critical Issues"
-          value={summary.criticalIssues}
-          icon={AlertTriangle}
-          color={summary.criticalIssues > 0 ? 'var(--state-error)' : 'var(--state-success)'}
-          subtext="Open + Overdue NCR/CAPA"
-        />
-        <KpiCard
-          label="Overdue Actions"
-          value={summary.overdueActions}
-          icon={Clock}
-          color={summary.overdueActions > 0 ? '#d97706' : 'var(--state-success)'}
-          subtext="Tasks + Issues"
-        />
-        <KpiCard
-          label="Pending Decisions"
-          value={summary.pendingDecisionsCount}
-          icon={FileText}
-          color={summary.pendingDecisionsCount > 0 ? '#d97706' : 'var(--text-muted)'}
-          subtext="Documents awaiting review"
-        />
-        <KpiCard
-          label="Expiring Files"
-          value={summary.expiringFiles}
-          icon={AlertCircle}
-          color={summary.expiringFiles > 0 ? 'var(--state-error)' : 'var(--state-success)'}
-          subtext="Expired or expiring in 30d"
-        />
-        <KpiCard
-          label="Awaiting Review"
-          value={summary.tasksAwaitingReview}
-          icon={Activity}
-          color={summary.tasksAwaitingReview > 0 ? '#d97706' : 'var(--text-muted)'}
-          subtext="Tasks in WAITING_REVIEW"
-        />
-        <KpiCard
-          label="Completion Rate"
-          value={summary.completionRate !== null ? `${summary.completionRate}%` : null}
-          icon={TrendingUp}
-          color={summary.completionRate !== null ? metricColor(summary.completionRate, 70, 40) : undefined}
-          trend={trends.weeklyTrend}
-        />
-      </div>
-      )}
-
-      {/* ── Attention + Decisions (hidden when no workspace access) ────────── */}
-      {!hasNoWorkspaceAccess && <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-
-        {/* Requires Executive Attention */}
-        <div className="rounded-xl border" style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
-          <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid var(--border-default)' }}>
-            <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
-              Requires Executive Attention
-            </h2>
-            <span className="text-xs font-medium px-2 py-0.5 rounded-full"
-              style={{ backgroundColor: attentionItems.length > 0 ? 'var(--state-error-soft)' : 'var(--state-success-soft)', color: attentionItems.length > 0 ? 'var(--state-error)' : 'var(--state-success)' }}>
-              {attentionItems.length}
-            </span>
+        <>
+          {/* ── KPI Grid — brief ring highlight on realtime update ─────────────── */}
+          <div
+            style={{
+              borderRadius: '14px',
+              boxShadow: highlighted ? '0 0 0 3px var(--accent-soft)' : '0 0 0 0 transparent',
+              transition: reducedMotion ? 'none' : 'box-shadow 0.7s ease',
+            }}
+          >
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <KpiCard
+                label="Compliance Health"
+                value={summary.complianceHealth !== null ? `${summary.complianceHealth}%` : null}
+                icon={Shield} status={compStatus}
+                subtext="Weighted compliance score"
+                reducedMotion={reducedMotion}
+              />
+              <KpiCard
+                label="Active Workspaces"
+                value={summary.activeWorkspaces}
+                icon={Building2} status="info"
+                subtext="Currently running"
+                reducedMotion={reducedMotion}
+              />
+              <KpiCard
+                label="Critical Issues"
+                value={summary.criticalIssues}
+                icon={AlertTriangle} status={critStatus}
+                subtext={summary.criticalIssues === 0 ? 'No open NCR/CAPA' : 'Open NCR/CAPA records'}
+                reducedMotion={reducedMotion}
+              />
+              <KpiCard
+                label="Overdue Actions"
+                value={summary.overdueActions}
+                icon={Clock} status={overdueStatus}
+                subtext={summary.overdueActions === 0 ? 'All tasks on schedule' : 'Tasks and actions past due'}
+                reducedMotion={reducedMotion}
+              />
+              <KpiCard
+                label="Pending Decisions"
+                value={summary.pendingDecisionsCount}
+                icon={FileText} status={pendingStatus}
+                subtext={summary.pendingDecisionsCount === 0 ? 'No pending approvals' : 'Documents awaiting approval'}
+                reducedMotion={reducedMotion}
+              />
+              <KpiCard
+                label="Expiring Files"
+                value={summary.expiringFiles}
+                icon={AlertCircle} status={expiryStatus}
+                subtext={summary.expiringFiles === 0 ? 'No files expiring soon' : 'Expired or expiring in 30 days'}
+                reducedMotion={reducedMotion}
+              />
+              <KpiCard
+                label="Awaiting Review"
+                value={summary.tasksAwaitingReview}
+                icon={Activity} status={awaitStatus}
+                subtext={summary.tasksAwaitingReview === 0 ? 'No tasks pending review' : 'Tasks pending approval'}
+                reducedMotion={reducedMotion}
+              />
+              <KpiCard
+                label="Completion Rate"
+                value={summary.completionRate !== null ? `${summary.completionRate}%` : null}
+                icon={Target} status={rateStatus}
+                trend={trends.weeklyTrend}
+                reducedMotion={reducedMotion}
+              />
+            </div>
           </div>
-          <div className="divide-y" style={{ '--divide-color': 'var(--border-subtle)' } as React.CSSProperties}>
-            {attentionItems.length === 0 ? (
-              <div className="flex items-center justify-center py-10 gap-2" style={{ color: 'var(--state-success)' }}>
-                <CheckCircle2 className="h-4 w-4" />
-                <span className="text-sm">No items require attention.</span>
-              </div>
-            ) : (
-              attentionItems.slice(0, 8).map((item) => {
-                const sev = severityColor(item.severity);
-                const typeHref = item.type === 'TASK'
-                  ? '/tasks'
-                  : item.type === 'DOCUMENT'
-                  ? '/documents'
-                  : '/ncr-capa';
-                return (
-                  <div key={`${item.type}-${item.id}`} className="px-5 py-3"
-                    style={{ borderBottomColor: 'var(--border-subtle)' }}>
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-xs font-medium px-1.5 py-0.5 rounded"
-                            style={{ backgroundColor: sev.bg, color: sev.color }}>{item.severity}</span>
-                          <span className="truncate text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{item.title}</span>
-                        </div>
-                        <div className="mt-1 flex items-center gap-3 text-xs" style={{ color: 'var(--text-muted)' }}>
-                          {item.workspace && <span>{item.workspace}</span>}
-                          {item.responsible && <span>{item.responsible}</span>}
-                          {item.overdueAge && <span style={{ color: 'var(--state-error)' }}>{item.overdueAge}</span>}
-                        </div>
-                      </div>
-                      <Link href={typeHref}
-                        className="shrink-0 flex items-center gap-1 text-xs font-medium"
-                        style={{ color: 'var(--accent-primary)' }}>
-                        Open <ChevronRight className="h-3 w-3" />
-                      </Link>
-                    </div>
+
+          {/* ── Executive Summary Strip ────────────────────────────────────────── */}
+          {summaryItems.length > 0 && (
+            <div
+              className="rounded-xl border px-5 py-4"
+              style={{ backgroundColor: 'var(--bg-subtle)', borderColor: 'var(--border-default)' }}
+            >
+              <p className="mb-3 text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
+                Executive Summary
+              </p>
+              <div className="flex flex-wrap gap-x-8 gap-y-2">
+                {summaryItems.map((item) => (
+                  <div key={item.label} className="flex items-baseline gap-1.5">
+                    <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>{item.label}:</span>
+                    <span className="text-xs font-bold" style={{ color: item.color }}>{item.value}</span>
                   </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-
-        {/* Decisions Awaiting You */}
-        <div className="rounded-xl border" style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
-          <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid var(--border-default)' }}>
-            <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Decisions Awaiting You</h2>
-            <span className="text-xs font-medium px-2 py-0.5 rounded-full"
-              style={{ backgroundColor: pendingDecisions.length > 0 ? 'var(--state-warning-soft)' : 'var(--state-success-soft)', color: pendingDecisions.length > 0 ? 'var(--state-warning)' : 'var(--state-success)' }}>
-              {pendingDecisions.length}
-            </span>
-          </div>
-          <div className="divide-y">
-            {pendingDecisions.length === 0 ? (
-              <div className="flex items-center justify-center py-10 gap-2" style={{ color: 'var(--state-success)' }}>
-                <CheckCircle2 className="h-4 w-4" />
-                <span className="text-sm">No executive decisions currently pending.</span>
+                ))}
               </div>
-            ) : (
-              pendingDecisions.slice(0, 8).map((d) => (
-                <div key={d.id} className="px-5 py-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>{d.title}</div>
-                      <div className="mt-1 flex items-center gap-3 text-xs" style={{ color: 'var(--text-muted)' }}>
-                        {d.department && <span>{d.department}</span>}
-                        <span>By {d.requester}</span>
-                        <span>{fmtDate(d.submittedAt)}</span>
-                      </div>
-                    </div>
-                    <Link href={`/documents/${d.id}`}
-                      className="shrink-0 flex items-center gap-1 text-xs font-medium"
-                      style={{ color: 'var(--accent-primary)' }}>
-                      Review <ChevronRight className="h-3 w-3" />
-                    </Link>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      </div>}
+            </div>
+          )}
 
-      {/* ── Organization Health ─────────────────────────────────────────────── */}
-      {!hasNoWorkspaceAccess && <div className="rounded-xl border" style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
-        <div className="px-5 py-4" style={{ borderBottom: '1px solid var(--border-default)' }}>
-          <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Organization Health</h2>
-          <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-            Health status is calculated from overdue actions, critical issues, completion progress, and compliance exposure.
-          </p>
-        </div>
-        {organizationHealth.length === 0 ? (
-          <div className="py-10 text-center text-sm" style={{ color: 'var(--text-muted)' }}>No active workspaces.</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-sm">
-              <thead>
-                <tr style={{ borderBottom: '1px solid var(--border-default)' }}>
-                  {['Workspace', 'Department', 'Health', 'Progress', 'Open Tasks', 'Overdue', 'Critical Issues', 'Total Issues'].map((h) => (
-                    <th key={h} className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide"
-                      style={{ color: 'var(--text-muted)', backgroundColor: 'var(--bg-subtle)' }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {organizationHealth.map((row) => {
-                  const hc = healthColor(row.health);
-                  return (
-                    <tr key={row.workspaceId} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                      <td className="px-4 py-3 font-medium" style={{ color: 'var(--text-primary)' }}>
-                        <Link href={`/workspaces/${row.workspaceId}`} className="hover:underline">{row.workspaceName}</Link>
-                      </td>
-                      <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>{row.department ?? '—'}</td>
-                      <td className="px-4 py-3">
-                        <span className="inline-flex rounded-full px-2 py-0.5 text-xs font-medium"
-                          style={{ backgroundColor: hc.bg, color: hc.color }}>{row.healthLabel}</span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <div className="h-1.5 w-16 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--bg-muted)' }}>
-                            <div className="h-full rounded-full" style={{ width: `${row.progress}%`, backgroundColor: hc.color }} />
-                          </div>
-                          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{row.progress}%</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-sm" style={{ color: 'var(--text-primary)' }}>{row.openTasks}</td>
-                      <td className="px-4 py-3 text-sm" style={{ color: row.overdueTasks > 0 ? 'var(--state-error)' : 'var(--text-muted)' }}>
-                        {row.overdueTasks}
-                      </td>
-                      <td className="px-4 py-3 text-sm" style={{ color: row.criticalIssues > 0 ? 'var(--state-error)' : 'var(--text-muted)' }}>
-                        {row.criticalIssues}
-                      </td>
-                      <td className="px-4 py-3 text-sm" style={{ color: 'var(--text-muted)' }}>{row.totalIssues}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>}
+          {/* ── Attention + Decisions ──────────────────────────────────────────── */}
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
 
-      {/* ── Trends + Department Performance ─────────────────────────────────── */}
-      {!hasNoWorkspaceAccess && <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-
-        {/* Compliance & Risk Summary */}
-        <div className="rounded-xl border p-5" style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
-          <h2 className="mb-4 text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Compliance &amp; Risk Summary</h2>
-          <div className="flex flex-col gap-4">
-            {[
-              { label: 'Evidence Readiness', value: trends.evidenceReadiness, desc: 'Checklist items approved / total' },
-              { label: 'Document Approval Rate', value: trends.docApprovalRate, desc: 'Approved docs / total docs' },
-              { label: 'NCR Resolution Rate', value: trends.ncrResolutionRate, desc: 'Verified + Closed / total NCR' },
-            ].map(({ label, value, desc }) => {
-              const color = value === null ? 'var(--text-disabled)' : value >= 80 ? 'var(--state-success)' : value >= 60 ? '#d97706' : 'var(--state-error)';
-              return (
-                <div key={label}>
-                  <div className="mb-1 flex items-center justify-between">
-                    <div>
-                      <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{label}</span>
-                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{desc}</p>
-                    </div>
-                    <span className="text-sm font-bold" style={{ color }}>{fmtMetric(value, '%')}</span>
-                  </div>
-                  {value !== null ? (
-                    <div className="h-2 w-full overflow-hidden rounded-full" style={{ backgroundColor: 'var(--bg-muted)' }}>
-                      <div className="h-full rounded-full transition-all duration-500"
-                        style={{ width: `${value}%`, backgroundColor: color }} />
-                    </div>
-                  ) : (
-                    <p className="text-[10px]" style={{ color: 'var(--text-disabled)' }}>No measurable data available.</p>
-                  )}
-                </div>
-              );
-            })}
-            {/* Weekly task completion trend */}
-            <div className="rounded-lg p-3" style={{ backgroundColor: 'var(--bg-subtle)' }}>
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Task Completion — This Week</span>
-                <span className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>{trends.completedThisWeek}</span>
-              </div>
-              {trends.weeklyTrend !== null ? (
-                <div className="mt-1 flex items-center gap-1 text-xs"
-                  style={{ color: trends.weeklyTrend >= 0 ? 'var(--state-success)' : 'var(--state-error)' }}>
-                  {trends.weeklyTrend >= 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
-                  {Math.abs(trends.weeklyTrend)}% vs previous week ({trends.completedLastWeek} completions)
+            {/* Requires Executive Attention */}
+            <div className="rounded-xl border shadow-sm overflow-hidden"
+              style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
+              <SectionHeader
+                title="Requires Executive Attention"
+                count={attentionItems.length}
+                countColor={attentionItems.length > 0 ? 'var(--state-error)' : 'var(--state-success)'}
+              />
+              {attentionItems.length === 0 ? (
+                <div className="flex flex-col items-center justify-center gap-2 py-6">
+                  <CheckCircle2 className="h-5 w-5" style={{ color: 'var(--state-success)' }} />
+                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    No items currently require executive attention.
+                  </span>
                 </div>
               ) : (
-                <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>No comparison data yet.</p>
+                <div className="divide-y" style={{ '--divide-color': 'var(--border-default)' } as React.CSSProperties}>
+                  {attentionItems.slice(0, 8).map((item) => {
+                    const sev = severityColor(item.severity);
+                    const typeHref = item.type === 'TASK' ? '/tasks' : item.type === 'DOCUMENT' ? '/documents' : '/ncr-capa';
+                    return (
+                      <div key={`${item.type}-${item.id}`} className="px-5 py-3"
+                        style={{ borderBottomColor: 'var(--border-default)' }}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-[11px] font-bold px-1.5 py-0.5 rounded"
+                                style={{ backgroundColor: sev.bg, color: sev.color }}>
+                                {item.severity}
+                              </span>
+                              <span className="truncate text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                                {item.title}
+                              </span>
+                            </div>
+                            <div className="mt-1 flex items-center gap-3 text-xs" style={{ color: 'var(--text-muted)' }}>
+                              {item.workspace && <span>{item.workspace}</span>}
+                              {item.responsible && <span>{item.responsible}</span>}
+                              {item.overdueAge && (
+                                <span className="font-semibold" style={{ color: 'var(--state-error)' }}>
+                                  {item.overdueAge}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <Link href={typeHref}
+                            className="shrink-0 flex items-center gap-0.5 text-xs font-semibold"
+                            style={{ color: 'var(--accent-primary)' }}>
+                            View <ChevronRight className="h-3 w-3" />
+                          </Link>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Decisions Awaiting You */}
+            <div className="rounded-xl border shadow-sm overflow-hidden"
+              style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
+              <SectionHeader
+                title="Decisions Awaiting You"
+                count={pendingDecisions.length}
+                countColor={pendingDecisions.length > 0 ? 'var(--state-warning)' : 'var(--state-success)'}
+              />
+              {pendingDecisions.length === 0 ? (
+                <div className="flex flex-col items-center justify-center gap-2 py-6">
+                  <CheckCircle2 className="h-5 w-5" style={{ color: 'var(--state-success)' }} />
+                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    No executive decisions are currently pending.
+                  </span>
+                </div>
+              ) : (
+                <div className="divide-y">
+                  {pendingDecisions.slice(0, 8).map((d) => (
+                    <div key={d.id} className="px-5 py-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+                            {d.title}
+                          </div>
+                          <div className="mt-1 flex items-center gap-3 text-xs" style={{ color: 'var(--text-muted)' }}>
+                            {d.department && <span>{d.department}</span>}
+                            <span>By {d.requester}</span>
+                            <span>{fmtDate(d.submittedAt)}</span>
+                          </div>
+                        </div>
+                        <Link href={`/documents/${d.id}`}
+                          className="shrink-0 flex items-center gap-0.5 text-xs font-semibold"
+                          style={{ color: 'var(--accent-primary)' }}>
+                          Review <ChevronRight className="h-3 w-3" />
+                        </Link>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           </div>
-        </div>
 
-        {/* Department Performance */}
-        <div className="rounded-xl border" style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
-          <div className="px-5 py-4" style={{ borderBottom: '1px solid var(--border-default)' }}>
-            <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Department Performance</h2>
+          {/* ── Organization Health ────────────────────────────────────────────── */}
+          <div className="rounded-xl border shadow-sm overflow-hidden"
+            style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
+            <SectionHeader
+              title="Organization Health"
+              subtitle="Health status is calculated from overdue actions, critical issues, completion progress, and compliance exposure."
+            />
+            {organizationHealth.length === 0 ? (
+              <CompactEmpty icon={Building2} message="No active workspaces." />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[640px] text-sm">
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--border-default)', backgroundColor: 'var(--bg-subtle)' }}>
+                      {['Workspace', 'Department', 'Health', 'Progress', 'Open Tasks', 'Overdue', 'Critical Issues', 'Total Issues'].map((h) => (
+                        <th key={h}
+                          className="px-4 py-2.5 text-left text-[11px] font-bold uppercase tracking-wide whitespace-nowrap"
+                          style={{ color: 'var(--text-muted)' }}>
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {organizationHealth.map((row) => {
+                      const hc = healthColor(row.health);
+                      return (
+                        <tr key={row.workspaceId}
+                          className="hover:bg-slate-50 transition-colors"
+                          style={{ borderBottom: '1px solid var(--border-default)' }}>
+                          <td className="px-4 py-3 font-semibold" style={{ color: 'var(--text-primary)' }}>
+                            <Link href={`/workspaces/${row.workspaceId}`} className="hover:underline underline-offset-2">
+                              {row.workspaceName}
+                            </Link>
+                          </td>
+                          <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>
+                            {row.department ?? '—'}
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-bold"
+                              style={{ backgroundColor: hc.bg, color: hc.color }}>
+                              {row.healthLabel}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2.5">
+                              <div className="h-2 w-24 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--bg-muted)' }}>
+                                <div className="h-full rounded-full"
+                                  style={{
+                                    width: `${row.progress}%`,
+                                    backgroundColor: hc.color,
+                                    transition: reducedMotion ? 'none' : 'width 0.6s ease',
+                                  }} />
+                              </div>
+                              <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
+                                {row.progress}%
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                            {row.openTasks}
+                          </td>
+                          <td className="px-4 py-3 text-sm font-semibold"
+                            style={{ color: row.overdueTasks > 0 ? 'var(--state-error)' : 'var(--text-muted)' }}>
+                            {row.overdueTasks}
+                          </td>
+                          <td className="px-4 py-3 text-sm font-semibold"
+                            style={{ color: row.criticalIssues > 0 ? 'var(--state-error)' : 'var(--text-muted)' }}>
+                            {row.criticalIssues}
+                          </td>
+                          <td className="px-4 py-3 text-sm" style={{ color: 'var(--text-muted)' }}>
+                            {row.totalIssues}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-          {departmentPerformance.length === 0 ? (
-            <div className="py-10 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
-              No department data available. Assign workspaces to departments to see performance.
+
+          {/* ── Compliance & Risk + Department Performance ─────────────────────── */}
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+
+            {/* Compliance & Risk Summary */}
+            <div className="rounded-xl border shadow-sm overflow-hidden"
+              style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
+              <SectionHeader title="Compliance &amp; Risk Summary" />
+              <div className="flex flex-col gap-5 p-5">
+                {[
+                  { label: 'Evidence Readiness',     value: trends.evidenceReadiness,  desc: 'Checklist items approved vs total' },
+                  { label: 'Document Approval Rate', value: trends.docApprovalRate,    desc: 'Approved documents vs total' },
+                  { label: 'NCR Resolution Rate',    value: trends.ncrResolutionRate,  desc: 'Verified and closed NCR vs total' },
+                ].map(({ label, value, desc }) => {
+                  const st = metricStatus(value);
+                  const s  = kpiStyle(st);
+                  return (
+                    <div key={label}>
+                      <div className="mb-2 flex items-end justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{label}</p>
+                          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{desc}</p>
+                        </div>
+                        <span className="text-lg font-bold shrink-0"
+                          style={{ color: value === null ? 'var(--text-disabled)' : s.accent }}>
+                          {fmtMetric(value, '%')}
+                        </span>
+                      </div>
+                      {value !== null ? (
+                        <div className="h-2 w-full overflow-hidden rounded-full" style={{ backgroundColor: 'var(--bg-muted)' }}>
+                          <div className="h-full rounded-full"
+                            style={{
+                              width: `${value}%`,
+                              backgroundColor: s.accent,
+                              transition: reducedMotion ? 'none' : 'width 0.6s ease',
+                            }} />
+                        </div>
+                      ) : (
+                        <p className="text-[10px]" style={{ color: 'var(--text-disabled)' }}>
+                          No measurable data available.
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* Weekly task completion */}
+                <div className="rounded-lg border p-3"
+                  style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)' }}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                      Task Completion — This Week
+                    </span>
+                    <span className="text-base font-bold" style={{ color: 'var(--text-primary)' }}>
+                      {trends.completedThisWeek}
+                    </span>
+                  </div>
+                  {trends.weeklyTrend !== null ? (
+                    <div className="mt-1 flex items-center gap-1 text-xs font-medium"
+                      style={{ color: trends.weeklyTrend >= 0 ? 'var(--state-success)' : 'var(--state-error)' }}>
+                      {trends.weeklyTrend >= 0
+                        ? <TrendingUp className="h-3 w-3" />
+                        : <TrendingDown className="h-3 w-3" />}
+                      {Math.abs(trends.weeklyTrend)}% vs previous week ({trends.completedLastWeek} completions)
+                    </div>
+                  ) : (
+                    <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>No comparison data yet.</p>
+                  )}
+                </div>
+              </div>
             </div>
-          ) : (
-            <div className="divide-y">
-              {departmentPerformance.map((d) => {
-                const color = metricColor(d.completionRate, 80, 60);
-                return (
-                  <div key={d.departmentId} className="px-5 py-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{d.departmentName}</span>
-                          <span className="text-sm font-bold" style={{ color }}>{fmtMetric(d.completionRate, '%')}</span>
+
+            {/* Department Performance */}
+            <div className="rounded-xl border shadow-sm overflow-hidden"
+              style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
+              <SectionHeader title="Department Performance" />
+              {departmentPerformance.length === 0 ? (
+                <CompactEmpty
+                  icon={Building2}
+                  message="Department performance will appear after workspaces are linked to departments."
+                />
+              ) : (
+                <div className="divide-y">
+                  {departmentPerformance.map((d) => {
+                    const st = metricStatus(d.completionRate, 80, 60);
+                    const s  = kpiStyle(st);
+                    return (
+                      <div key={d.departmentId} className="px-5 py-3.5 hover:bg-slate-50 transition-colors"
+                        style={{ borderBottomColor: 'var(--border-default)' }}>
+                        <div className="flex items-start justify-between gap-3 mb-2">
+                          <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+                            {d.departmentName}
+                          </span>
+                          <div className="flex items-center gap-2 shrink-0">
+                            {d.overdueCount > 0 && (
+                              <span className="text-[11px] font-bold px-1.5 py-0.5 rounded"
+                                style={{ backgroundColor: 'var(--state-error-soft)', color: 'var(--state-error)' }}>
+                                {d.overdueCount} overdue
+                              </span>
+                            )}
+                            <span className="text-base font-bold"
+                              style={{ color: d.completionRate === null ? 'var(--text-disabled)' : s.accent }}>
+                              {fmtMetric(d.completionRate, '%')}
+                            </span>
+                          </div>
                         </div>
                         {d.completionRate !== null ? (
-                          <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full" style={{ backgroundColor: 'var(--bg-muted)' }}>
+                          <div className="h-2 w-full overflow-hidden rounded-full" style={{ backgroundColor: 'var(--bg-muted)' }}>
                             <div className="h-full rounded-full"
-                              style={{ width: `${d.completionRate}%`, backgroundColor: color }} />
+                              style={{
+                                width: `${d.completionRate}%`,
+                                backgroundColor: s.accent,
+                                transition: reducedMotion ? 'none' : 'width 0.6s ease',
+                              }} />
                           </div>
                         ) : (
                           <p className="text-[10px]" style={{ color: 'var(--text-disabled)' }}>No measurable data</p>
                         )}
-                        <div className="mt-1 flex gap-3 text-xs" style={{ color: 'var(--text-muted)' }}>
-                          <span>{d.overdueCount} overdue</span>
-                          <span>{d.issueCount} issues</span>
-                        </div>
+                        {d.issueCount > 0 && (
+                          <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                            {d.issueCount} issue{d.issueCount > 1 ? 's' : ''} open
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── Recent Significant Activity ────────────────────────────────────── */}
+          <div className="rounded-xl border shadow-sm overflow-hidden"
+            style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
+            <SectionHeader
+              title="Recent Significant Activity"
+              subtitle="Approvals, rejections, closures, and important state changes"
+            />
+            {significantActivity.length === 0 ? (
+              <CompactEmpty icon={Activity} message="No significant activity recorded yet." />
+            ) : (
+              <div className="divide-y">
+                {significantActivity.map((a) => (
+                  <div key={a.id} className="flex items-start gap-3 px-5 py-3">
+                    <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full"
+                      style={{ backgroundColor: 'var(--bg-muted)' }}>
+                      <Activity className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+                          {a.actor}
+                        </span>
+                        <span className="text-xs rounded px-1.5 py-0.5 font-medium"
+                          style={{ backgroundColor: 'var(--bg-subtle)', color: 'var(--text-secondary)' }}>
+                          {formatAction(a.action)}
+                        </span>
+                        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{a.entityType}</span>
                       </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>}
-
-      {/* ── Recent Significant Activity ──────────────────────────────────────── */}
-      {!hasNoWorkspaceAccess && <div className="rounded-xl border" style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
-        <div className="px-5 py-4" style={{ borderBottom: '1px solid var(--border-default)' }}>
-          <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Recent Significant Activity</h2>
-          <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-            Approvals, rejections, closures, and important state changes
-          </p>
-        </div>
-        {significantActivity.length === 0 ? (
-          <div className="py-10 text-center text-sm" style={{ color: 'var(--text-muted)' }}>No significant activity recorded yet.</div>
-        ) : (
-          <div className="divide-y">
-            {significantActivity.map((a) => (
-              <div key={a.id} className="flex items-start gap-3 px-5 py-3">
-                <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full"
-                  style={{ backgroundColor: 'var(--bg-muted)' }}>
-                  <Activity className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-                      {a.actor}
+                    <span className="shrink-0 text-xs" style={{ color: 'var(--text-muted)' }}>
+                      {timeAgo(a.timestamp)}
                     </span>
-                    <span className="text-xs rounded px-1.5 py-0.5"
-                      style={{ backgroundColor: 'var(--bg-subtle)', color: 'var(--text-muted)' }}>
-                      {a.action.replace(/_/g, ' ')}
-                    </span>
-                    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{a.entityType}</span>
                   </div>
-                </div>
-                <span className="shrink-0 text-xs" style={{ color: 'var(--text-muted)' }}>{timeAgo(a.timestamp)}</span>
+                ))}
               </div>
-            ))}
+            )}
           </div>
-        )}
-      </div>}
+
+        </>
+      )}
 
     </div>
   );
