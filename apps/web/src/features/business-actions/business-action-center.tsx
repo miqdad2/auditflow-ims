@@ -8,6 +8,7 @@ import {
   ExternalLink, X, Filter, ChevronDown, ChevronUp, ArrowRight,
 } from 'lucide-react';
 import { apiGet, apiPostAuth, ApiError } from '@/lib/api';
+import { useSocket } from '@/lib/socket-provider';
 import type {
   ActionItem, ActionPreview, DetectionRule, ItemStatus, RuleColor,
 } from './types';
@@ -562,6 +563,30 @@ export default function BusinessActionCenter({
   }, [token]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Realtime: business events that affect action-center items → debounced silent refresh
+  const { socket } = useSocket();
+  const bacRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!socket) return;
+    const BAC_EVENTS = [
+      'task.created', 'task.updated', 'task.deleted',
+      'document.created', 'document.updated',
+      'ncr.created', 'ncr.updated',
+      'attachment.created', 'attachment.updated',
+      'workspace.member.added', 'workspace.member.removed',
+    ];
+    const schedule = () => {
+      if (bacRefreshTimer.current) clearTimeout(bacRefreshTimer.current);
+      // Heavier debounce for action center — detection rules are expensive
+      bacRefreshTimer.current = setTimeout(() => void load(), 1500);
+    };
+    BAC_EVENTS.forEach((e) => socket.on(e, schedule));
+    return () => {
+      BAC_EVENTS.forEach((e) => socket.off(e, schedule));
+      if (bacRefreshTimer.current) clearTimeout(bacRefreshTimer.current);
+    };
+  }, [socket, load]);
 
   // ─── Part 8: concurrency check ──────────────────────────────────────────
   // Returns true if safe to proceed; shows an inline warning and still proceeds

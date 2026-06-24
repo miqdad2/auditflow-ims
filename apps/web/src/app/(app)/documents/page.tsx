@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Plus, Search, FileText, RefreshCw, Files, X } from 'lucide-react';
 import { apiGet } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { useSocket } from '@/lib/socket-provider';
 import { StatusBadge } from '@/components/status-badge';
 import { UploadDocumentModal } from '@/features/documents/upload-document-modal';
 import { BulkUploadModal } from '@/features/documents/bulk-upload-modal';
@@ -16,6 +17,7 @@ interface Workspace  { id: string; name: string; }
 
 export default function DocumentsPage() {
   const { token, user } = useAuth();
+  const { socket } = useSocket();
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -78,6 +80,23 @@ export default function DocumentsPage() {
   }, [token]);
 
   useEffect(() => { loadDocuments(1); }, [loadDocuments]);
+
+  // Realtime: document.created / document.updated → debounced silent refresh
+  const docRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!socket) return;
+    const schedule = () => {
+      if (docRefreshTimer.current) clearTimeout(docRefreshTimer.current);
+      docRefreshTimer.current = setTimeout(() => loadDocuments(1), 400);
+    };
+    socket.on('document.created', schedule);
+    socket.on('document.updated', schedule);
+    return () => {
+      socket.off('document.created', schedule);
+      socket.off('document.updated', schedule);
+      if (docRefreshTimer.current) clearTimeout(docRefreshTimer.current);
+    };
+  }, [socket, loadDocuments]);
 
   function handleSearch(e: React.FormEvent) {
     e.preventDefault();

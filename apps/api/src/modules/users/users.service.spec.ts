@@ -77,10 +77,12 @@ function makeAuditLog() {
   return { log: jest.fn() };
 }
 
+const mockRealtime = { emit: jest.fn(), emitToUser: jest.fn(), emitToWorkspace: jest.fn(), emitGlobal: jest.fn() };
+
 // Lazy import so mocks are set before the module is loaded
 async function makeService(prisma: ReturnType<typeof makePrisma>) {
   const { UsersService } = await import('./users.service');
-  return new UsersService(prisma as never, makeAuditLog() as never);
+  return new UsersService(prisma as never, makeAuditLog() as never, mockRealtime as never);
 }
 
 // ─── Part A: Pure helper functions (no DB needed) ─────────────────────────────

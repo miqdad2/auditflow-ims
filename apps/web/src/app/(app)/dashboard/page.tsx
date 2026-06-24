@@ -229,8 +229,9 @@ export default function DashboardPage() {
   // Activity / Notifications tab
   const [feedTab, setFeedTab] = useState<'activity' | 'notifications'>('activity');
 
-  const initialLoadDoneRef = useRef(false);
-  const prevConnectedRef   = useRef(false);
+  const initialLoadDoneRef    = useRef(false);
+  const prevConnectedRef      = useRef(false);
+  const refreshTimerRef       = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -285,8 +286,28 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!socket) return;
-    const handleStale        = () => setHasUpdates(true);
-    const handleNotification = () => { setLocalUnread((c) => (c ?? 0) + 1); setHasUpdates(true); };
+    // Compute roles inside effect so the effect re-runs when user/roles change.
+    const currentRoles = user?.roles ?? [];
+    const elevated  = currentRoles.some((r) => ELEVATED.includes(r));
+    const superRole = currentRoles.some((r) => SUPER_ROLES.includes(r));
+
+    function scheduleDashboardRefresh() {
+      if (!initialLoadDoneRef.current) return;
+      if (elevated) {
+        // Elevated users: debounced silent auto-refresh — no banner click required
+        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = setTimeout(() => {
+          void load();
+          if (superRole) void loadBac(); // refresh BAC for super roles
+        }, 500);
+      } else {
+        // Normal users: stale banner (personal dashboard, less time-sensitive)
+        setHasUpdates(true);
+      }
+    }
+
+    const handleStale         = () => scheduleDashboardRefresh();
+    const handleNotification  = () => { setLocalUnread((c) => (c ?? 0) + 1); setHasUpdates(true); };
     const handleAccessRemoved = () => void load();
     STALE_EVENTS.forEach((e) => socket.on(e, handleStale));
     socket.on('notification.created', handleNotification);
@@ -295,8 +316,9 @@ export default function DashboardPage() {
       STALE_EVENTS.forEach((e) => socket.off(e, handleStale));
       socket.off('notification.created', handleNotification);
       socket.off('workspace.access.removed', handleAccessRemoved);
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     };
-  }, [socket, load]);
+  }, [socket, load, loadBac, user]);
 
   // ─── Role detection ──────────────────────────────────────────────────────────
   const roles       = user?.roles ?? [];

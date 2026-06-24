@@ -10,6 +10,7 @@ import {
 import { apiGet, apiPostAuth, apiPatchAuth, apiDeleteAuth } from '@/lib/api';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
+import { useSocket } from '@/lib/socket-provider';
 import { useToast } from '@/lib/toast-provider';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -122,6 +123,7 @@ const BLANK_EDIT = {
 
 export default function UsersPage() {
   const { token, user } = useAuth();
+  const { socket } = useSocket();
   const { showToast } = useToast();
 
   const [users, setUsers]             = useState<UserRow[]>([]);
@@ -231,6 +233,21 @@ export default function UsersPage() {
   }, [token, search, filterDept, filterStatus, filterAccess]); // roles deliberately excluded
 
   useEffect(() => { void loadData(); }, [loadData]);
+
+  // Realtime: user.updated → debounced refresh (respects Unit 63.4 server-side scope)
+  const userRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!socket) return;
+    const schedule = () => {
+      if (userRefreshTimer.current) clearTimeout(userRefreshTimer.current);
+      userRefreshTimer.current = setTimeout(() => void loadData(), 400);
+    };
+    socket.on('user.updated', schedule);
+    return () => {
+      socket.off('user.updated', schedule);
+      if (userRefreshTimer.current) clearTimeout(userRefreshTimer.current);
+    };
+  }, [socket, loadData]);
 
   // Load workspaces for both create + edit pickers
   const loadWorkspaces = useCallback(async () => {

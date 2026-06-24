@@ -1,11 +1,13 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   AlertTriangle, Plus, Search, RefreshCw, X,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
+import { useSocket } from '@/lib/socket-provider';
+import { apiGet } from '@/lib/api';
 import { CreateNcrModal } from '@/features/ncr-capa/create-ncr-modal';
 import { NcrDetailPanel } from '@/features/ncr-capa/ncr-detail-panel';
 import type { NcrCapaSummary, NcrStatus, Severity } from '@/features/ncr-capa/types';
@@ -44,7 +46,7 @@ function SeverityBadge({ severity }: { severity: Severity }) {
 
 export default function NcrCapaPage() {
   const { user, token } = useAuth();
-  const base = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+  const { socket, connected } = useSocket();
   const searchParams = useSearchParams();
 
   const [records, setRecords]       = useState<NcrCapaSummary[]>([]);
@@ -59,22 +61,45 @@ export default function NcrCapaPage() {
 
   const canCreate = user?.permissions?.includes('ncr.create') ?? false;
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const refreshTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const initialLoadDoneRef = useRef(false);
+  const prevConnectedRef   = useRef(false);
+
+  const load = useCallback(async (silent = false) => {
+    if (!token) return;
+    if (!silent) setLoading(true);
     try {
-      const res = await fetch(`${base}/ncr-capa`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data: unknown = await res.json();
-      if (Array.isArray(data)) {
-        setAllRecords(data as NcrCapaSummary[]);
-      }
+      const data = await apiGet<NcrCapaSummary[]>('/ncr-capa', token);
+      setAllRecords(data);
+      initialLoadDoneRef.current = true;
     } catch { /* ignore */ } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
-  }, [base, token]);
+  }, [token]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Reconnect reconciliation
+  useEffect(() => {
+    if (connected && !prevConnectedRef.current && initialLoadDoneRef.current) void load(true);
+    prevConnectedRef.current = connected;
+  }, [connected, load]);
+
+  // Realtime: ncr.created and ncr.updated → debounced silent refetch
+  useEffect(() => {
+    if (!socket) return;
+    const schedule = () => {
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = setTimeout(() => void load(true), 400);
+    };
+    socket.on('ncr.created', schedule);
+    socket.on('ncr.updated', schedule);
+    return () => {
+      socket.off('ncr.created', schedule);
+      socket.off('ncr.updated', schedule);
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    };
+  }, [socket, load]);
 
   // Client-side filter for tabs + search + type + workspace
   useEffect(() => {

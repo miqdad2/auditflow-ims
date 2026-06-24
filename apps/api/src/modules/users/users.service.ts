@@ -4,6 +4,7 @@ import {
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../common/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { RealtimeService } from '../realtime/realtime.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { SetUserStatusDto } from './dto/set-user-status.dto';
@@ -55,6 +56,7 @@ export class UsersService {
   constructor(
     private prisma: PrismaService,
     private auditLog: AuditLogService,
+    private realtime: RealtimeService,
   ) {}
 
   async findAll(
@@ -183,6 +185,7 @@ export class UsersService {
       entityId: user.id,
       newValue: { email: user.email, fullName: user.fullName },
     });
+    try { this.realtime.emitGlobal('user.updated', { id: user.id, action: 'created' }); } catch { /* non-fatal */ }
 
     return user;
   }
@@ -218,6 +221,7 @@ export class UsersService {
       entityId: id,
       newValue: updateData as Record<string, unknown>,
     });
+    try { this.realtime.emitGlobal('user.updated', { id, action: 'updated' }); } catch { /* non-fatal */ }
 
     return this.findOne(id);
   }
@@ -259,6 +263,7 @@ export class UsersService {
       previousValue: { isActive: existing.isActive },
       newValue: { isActive: dto.isActive },
     });
+    try { this.realtime.emitGlobal('user.updated', { id, action: dto.isActive ? 'reactivated' : 'deactivated' }); } catch { /* non-fatal */ }
 
     return this.findOne(id);
   }

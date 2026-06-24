@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma.service';
+import { RealtimeService } from '../realtime/realtime.service';
 import { CreateDepartmentDto } from './dto/create-department.dto';
 import { UpdateDepartmentDto } from './dto/update-department.dto';
 
@@ -7,7 +8,10 @@ const COUNT_SELECT = { users: true, workspaces: true } as const;
 
 @Injectable()
 export class DepartmentsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private realtime: RealtimeService,
+  ) {}
 
   findAll(includeInactive = false) {
     return this.prisma.department.findMany({
@@ -65,6 +69,7 @@ export class DepartmentsService {
         newValue: { name: dept.name, code: dept.code },
       },
     });
+    try { this.realtime.emitGlobal('department.updated', { id: dept.id, action: 'created' }); } catch { /* non-fatal */ }
     return dept;
   }
 
@@ -112,6 +117,7 @@ export class DepartmentsService {
         },
       });
     }
+    try { this.realtime.emitGlobal('department.updated', { id: updated.id, action: 'updated' }); } catch { /* non-fatal */ }
     return updated;
   }
 }

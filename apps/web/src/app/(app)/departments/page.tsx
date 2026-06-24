@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { apiGet, apiPostAuth, apiPatchAuth } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { useSocket } from '@/lib/socket-provider';
 import { useToast } from '@/lib/toast-provider';
 
 interface DepartmentCount {
@@ -57,6 +58,7 @@ const inputSt  = { borderColor: 'var(--border-default)', backgroundColor: 'var(-
 
 export default function DepartmentsPage() {
   const { token, user } = useAuth();
+  const { socket } = useSocket();
   const { showToast } = useToast();
 
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -101,6 +103,21 @@ export default function DepartmentsPage() {
   }, [token]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Realtime: department.updated → debounced silent refresh
+  const deptRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!socket) return;
+    const schedule = () => {
+      if (deptRefreshTimer.current) clearTimeout(deptRefreshTimer.current);
+      deptRefreshTimer.current = setTimeout(() => void load(), 400);
+    };
+    socket.on('department.updated', schedule);
+    return () => {
+      socket.off('department.updated', schedule);
+      if (deptRefreshTimer.current) clearTimeout(deptRefreshTimer.current);
+    };
+  }, [socket, load]);
 
   useEffect(() => {
     if (!openMenuId) return;
