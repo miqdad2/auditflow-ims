@@ -202,7 +202,7 @@ export default function ReportsPage() {
   const [loading, setLoading]     = useState(true);
   const [fetchError, setFetchError] = useState('');
   const [lastUpdated, setLastUpdated] = useState<string>('');
-  const [hasUpdates, setHasUpdates] = useState(false);
+  const reportsRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Export menu ──────────────────────────────────────────────────────────
   const [exportOpen, setExportOpen] = useState(false);
@@ -235,11 +235,10 @@ export default function ReportsPage() {
   }, [exportOpen]);
 
   // ── Load report data ─────────────────────────────────────────────────────
-  const load = useCallback(async () => {
+  // silent=true: debounced auto-refresh — no spinner, preserves existing data on failure
+  const load = useCallback(async (silent = false) => {
     if (!token) return;
-    setLoading(true);
-    setFetchError('');
-    setHasUpdates(false);
+    if (!silent) { setLoading(true); setFetchError(''); }
     try {
       const params = new URLSearchParams();
       if (dateFrom) params.set('dateFrom', dateFrom);
@@ -250,9 +249,10 @@ export default function ReportsPage() {
       setData(result);
       setLastUpdated(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }));
     } catch (err) {
-      setFetchError(err instanceof Error ? err.message : 'Failed to load report data');
+      if (!silent) setFetchError(err instanceof Error ? err.message : 'Failed to load report data');
+      // On silent failure: preserve existing data, no error shown
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [token, dateFrom, dateTo, deptFilter, wsFilter]);
 
@@ -267,13 +267,19 @@ export default function ReportsPage() {
 
   useEffect(() => { void load(); }, [load]);
 
-  // Stale indicator
+  // Realtime: auto-refresh reports with a 2.5s debounce (heavier — report queries are expensive)
   useEffect(() => {
     if (!socket) return;
-    const handler = () => setHasUpdates(true);
-    STALE_EVENTS.forEach((ev) => socket.on(ev, handler));
-    return () => STALE_EVENTS.forEach((ev) => socket.off(ev, handler));
-  }, [socket]);
+    const schedule = () => {
+      if (reportsRefreshTimer.current) clearTimeout(reportsRefreshTimer.current);
+      reportsRefreshTimer.current = setTimeout(() => void load(true), 2500);
+    };
+    STALE_EVENTS.forEach((ev) => socket.on(ev, schedule));
+    return () => {
+      STALE_EVENTS.forEach((ev) => socket.off(ev, schedule));
+      if (reportsRefreshTimer.current) clearTimeout(reportsRefreshTimer.current);
+    };
+  }, [socket, load]);
 
   // Apply preset
   function applyPreset(p: DateRangePreset) {
@@ -321,12 +327,6 @@ export default function ReportsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          {hasUpdates && (
-            <span className="flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium"
-              style={{ backgroundColor: 'var(--state-warning-soft)', color: 'var(--state-warning)' }}>
-              <Activity className="h-3 w-3" />New data available
-            </span>
-          )}
           {lastUpdated && !loading && (
             <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Updated {lastUpdated}</span>
           )}

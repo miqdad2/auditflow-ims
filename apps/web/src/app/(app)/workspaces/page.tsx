@@ -5,7 +5,7 @@ import {
   Plus, Loader2, FolderOpen, ListTodo, CheckSquare, MoreHorizontal,
   Pencil, Archive, RotateCcw, Trash2, Search, LayoutGrid, List,
   Clock, FileSearch, AlertCircle, ShieldCheck, Users, ShieldAlert,
-  RefreshCw, Zap, AlertTriangle,
+  RefreshCw, AlertTriangle,
 } from 'lucide-react';
 import { apiGet, apiPatchAuth, apiDeleteAuth } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -20,13 +20,15 @@ import Link from 'next/link';
 // Roles that see all workspaces and get the business control view
 const ELEVATED_ROLES = ['SUPER_ADMIN', 'IT_ADMIN', 'ISO_MANAGER', 'QHSE_USER', 'SUPER_USER'];
 
-// Events that should trigger the "New updates available" stale banner
+// Events that carry a workspaceId → trigger targeted single-workspace refresh
+// Events without workspaceId → trigger debounced full-list refresh
 const STALE_EVENTS = [
   'task.created', 'task.updated', 'task.deleted',
   'document.created', 'document.updated',
   'ncr.created', 'ncr.updated',
   'attachment.created',
   'workspace.member.added', 'workspace.member.removed',
+  'workspace.updated',
 ] as const;
 
 export default function WorkspacesPage() {
@@ -35,7 +37,8 @@ export default function WorkspacesPage() {
 
   const [workspaces, setWorkspaces]         = useState<WorkspaceSummary[]>([]);
   const [loading, setLoading]               = useState(true);
-  const [hasUpdates, setHasUpdates]         = useState(false);
+  // globalRefreshTimer: used when an event has no workspaceId (e.g. workspace.updated)
+  const globalRefreshTimer                  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showCreate, setShowCreate]         = useState(false);
   const [editTarget, setEditTarget]         = useState<WorkspaceSummary | null>(null);
   const [accessTarget, setAccessTarget]     = useState<WorkspaceSummary | null>(null);
@@ -68,7 +71,6 @@ export default function WorkspacesPage() {
   const load = useCallback(async () => {
     if (!token) return;
     setLoading(true);
-    setHasUpdates(false);
     try {
       const data = await apiGet<WorkspaceSummary[]>('/workspaces', token);
       setWorkspaces(data);
@@ -117,16 +119,22 @@ export default function WorkspacesPage() {
     const handler = (data: Record<string, unknown>) => {
       const wsId = (data as { workspaceId?: string }).workspaceId;
       if (wsId) {
+        // Targeted patch — update only the affected workspace card
         scheduleWorkspaceRefresh(wsId);
       } else {
-        setHasUpdates(true);
+        // No workspaceId (e.g. workspace.updated global event) → debounced full refresh
+        if (globalRefreshTimer.current) clearTimeout(globalRefreshTimer.current);
+        globalRefreshTimer.current = setTimeout(() => void load(), 800);
       }
     };
     STALE_EVENTS.forEach((e) => socket.on(e, handler));
-    return () => { STALE_EVENTS.forEach((e) => socket.off(e, handler)); };
+    return () => {
+      STALE_EVENTS.forEach((e) => socket.off(e, handler));
+      if (globalRefreshTimer.current) clearTimeout(globalRefreshTimer.current);
+    };
   // scheduleWorkspaceRefresh is defined in component scope and stable
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [socket]);
+  }, [socket, load]);
 
   // ── Menu close on outside click ───────────────────────────────────────────
 
@@ -236,23 +244,6 @@ export default function WorkspacesPage() {
   return (
     <div className="flex flex-col gap-5 p-6">
 
-      {/* ── Stale banner ────────────────────────────────────────────────── */}
-      {hasUpdates && (
-        <div className="flex items-center justify-between rounded-xl px-4 py-3"
-          style={{ backgroundColor: 'var(--accent-soft)', border: '1px solid var(--accent-primary)30' }}>
-          <div className="flex items-center gap-2">
-            <Zap className="h-4 w-4" style={{ color: 'var(--accent-primary)' }} />
-            <span className="text-sm font-medium" style={{ color: 'var(--accent-primary)' }}>
-              Workspace data has changed.
-            </span>
-          </div>
-          <button onClick={() => void load()}
-            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium"
-            style={{ backgroundColor: 'var(--accent-primary)', color: '#fff' }}>
-            <RefreshCw className="h-3.5 w-3.5" /> Refresh
-          </button>
-        </div>
-      )}
 
       {/* ── Page header ─────────────────────────────────────────────────── */}
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
