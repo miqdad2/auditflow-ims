@@ -32,6 +32,7 @@ export class WorkspacesService {
     actorId: string,
     actorRoles: string[],
     actorDeptId: string | null,
+    visibilityMode?: string,  // optional: pass from controller to avoid extra DB lookup
   ): Promise<void> {
     if (actorRoles.some((r) => ELEVATED_ROLES.includes(r))) return;
 
@@ -50,10 +51,19 @@ export class WorkspacesService {
       if (isDeptRole) return;
     }
 
-    // ORGANIZATION visibility: only elevated roles (handled above) + explicit members (handled above)
-    // PRIVATE visibility: only explicit members (handled above)
-    // STAFF and AUDITOR_VIEWER must be explicit members — no implicit access
-    throw new ForbiddenException('You do not have access to this workspace');
+    // ALL workspace visibility: grants read-level access to all workspaces.
+    // Used by Executive users configured with workspaceVisibilityMode = 'ALL'.
+    // If not passed by the caller, look it up from DB (one fast PK lookup).
+    const resolvedMode = visibilityMode !== undefined
+      ? visibilityMode
+      : await this.prisma.user.findUnique({
+          where: { id: actorId },
+          select: { workspaceVisibilityMode: true },
+        }).then((u) => (u?.workspaceVisibilityMode as string | null) ?? 'SELECTED');
+
+    if (resolvedMode === 'ALL') return;
+
+    throw new ForbiddenException('Workspace unavailable or access denied.');
   }
 
   /**
@@ -202,11 +212,18 @@ export class WorkspacesService {
     };
   }
 
-  async findAll(actorId: string, actorRoles: string[], actorDeptId: string | null) {
+  async findAll(
+    actorId: string,
+    actorRoles: string[],
+    actorDeptId: string | null,
+    visibilityMode = 'SELECTED',
+  ) {
     const isElevated = actorRoles.some((r) => ELEVATED_ROLES.includes(r));
     const isDeptRole = actorRoles.includes('DEPARTMENT_MANAGER') || actorRoles.includes('DEPARTMENT_USER');
 
-    const where = isElevated
+    // ALL visibility: return all workspaces (same as elevated scope for list purposes).
+    // Executive users with workspaceVisibilityMode = 'ALL' see every active workspace.
+    const where = (isElevated || visibilityMode === 'ALL')
       ? {}
       : isDeptRole && actorDeptId
         ? {

@@ -452,6 +452,48 @@ On smaller screens:
 - Keyboard navigation should work for core forms and modals.
 - Avoid tiny click targets.
 
+## Executive Dashboard Layout
+
+For users with `dashboardExperience = EXECUTIVE`, the dashboard uses a simplified focused layout.
+
+### Executive Sidebar
+
+```
+Dashboard (→ /executive-dashboard)
+ISO Workspaces
+Reports
+Notifications
+```
+
+Hidden from Executive sidebar: My Tasks, Admin Settings, System Health, System Errors, User Management, Departments (unless the account also holds a qualifying system-access role).
+
+### Executive Dashboard Sections (Unit 66.2)
+
+**Primary KPI grid** — 4 cards in `grid-cols-2 lg:grid-cols-4`:
+- Active Workspaces
+- Critical Issues
+- Overdue Actions
+- Expiring Files
+
+**Secondary performance strip** (compact, 3-column):
+- Awaiting Review
+- Completion Rate
+- Completed This Week
+
+**Below the KPIs:**
+- Organization Health (workspace-level health table)
+- Compliance & Risk Summary + Department Performance (2-col grid)
+- Recent Significant Activity
+
+**Removed sections** (not shown in Executive Dashboard):
+- Compliance Health KPI card
+- Pending Decisions KPI card
+- Executive Summary strip
+- Requires Executive Attention panel
+- Decisions Awaiting You panel
+
+Backend API still returns these fields — they are simply not rendered in the UI.
+
 ## What Not To Build
 
 Do not build:

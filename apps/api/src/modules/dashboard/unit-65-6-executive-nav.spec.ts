@@ -36,11 +36,13 @@ function healthRowBg(health: string): string {
 }
 
 // ─── Local duplicate of EXECUTIVE_NAV (must match app-sidebar.tsx exactly) ───
+// Updated in Unit 66.2: ISO Workspaces restored as 2nd item.
 
 const EXECUTIVE_NAV = [
-  { label: 'Dashboard',     href: '/dashboard'     },
-  { label: 'Reports',       href: '/reports'        },
-  { label: 'Notifications', href: '/notifications'  },
+  { label: 'Dashboard',      href: '/dashboard'    },
+  { label: 'ISO Workspaces', href: '/workspaces'   },
+  { label: 'Reports',        href: '/reports'       },
+  { label: 'Notifications',  href: '/notifications' },
 ];
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -174,29 +176,34 @@ describe('Unit 65.6 — Executive Navigation & Dashboard Helpers', () => {
   });
 
   // ── EXECUTIVE_NAV shape ───────────────────────────────────────────────────
+  // Unit 66.2: ISO Workspaces restored to Executive sidebar as 2nd item.
 
-  it('Test 28 — EXECUTIVE_NAV: has exactly 3 items (Dashboard, Reports, Notifications)', () => {
-    expect(EXECUTIVE_NAV).toHaveLength(3);
+  it('Test 28 — EXECUTIVE_NAV: has exactly 4 items (Dashboard, ISO Workspaces, Reports, Notifications)', () => {
+    expect(EXECUTIVE_NAV).toHaveLength(4);
   });
 
   it('Test 29 — EXECUTIVE_NAV: first item label is Dashboard', () => {
     expect(EXECUTIVE_NAV[0].label).toBe('Dashboard');
   });
 
-  it('Test 30 — EXECUTIVE_NAV: second item label is Reports', () => {
-    expect(EXECUTIVE_NAV[1].label).toBe('Reports');
+  it('Test 30 — EXECUTIVE_NAV: second item label is ISO Workspaces (restored in Unit 66.2)', () => {
+    expect(EXECUTIVE_NAV[1].label).toBe('ISO Workspaces');
   });
 
-  it('Test 31 — EXECUTIVE_NAV: third item label is Notifications', () => {
-    expect(EXECUTIVE_NAV[2].label).toBe('Notifications');
+  it('Test 31 — EXECUTIVE_NAV: third item label is Reports', () => {
+    expect(EXECUTIVE_NAV[2].label).toBe('Reports');
   });
 
-  it('Test 32 — EXECUTIVE_NAV: no item has label "ISO Workspaces"', () => {
-    const hasWorkspaces = EXECUTIVE_NAV.some((item) => item.label === 'ISO Workspaces');
-    expect(hasWorkspaces).toBe(false);
+  it('Test 32 — EXECUTIVE_NAV: fourth item label is Notifications', () => {
+    expect(EXECUTIVE_NAV[3].label).toBe('Notifications');
   });
 
-  it('Test 33 — EXECUTIVE_NAV: Dashboard href is "/dashboard" (resolved dynamically to /executive-dashboard in render)', () => {
+  it('Test 33 — EXECUTIVE_NAV: ISO Workspaces href is "/workspaces"', () => {
+    const wsItem = EXECUTIVE_NAV.find((item) => item.label === 'ISO Workspaces');
+    expect(wsItem?.href).toBe('/workspaces');
+  });
+
+  it('Test 34 — EXECUTIVE_NAV: Dashboard href is "/dashboard" (resolved dynamically to /executive-dashboard in render)', () => {
     const dashItem = EXECUTIVE_NAV.find((item) => item.label === 'Dashboard');
     expect(dashItem?.href).toBe('/dashboard');
   });

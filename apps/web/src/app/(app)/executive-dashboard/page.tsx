@@ -3,9 +3,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import {
-  RefreshCw, Wifi, WifiOff, AlertTriangle, CheckCircle2,
-  TrendingUp, TrendingDown, Activity, Clock, FileText,
-  Shield, ChevronRight, Building2, Loader2,
+  RefreshCw, AlertTriangle, CheckCircle2,
+  TrendingUp, TrendingDown, Activity, Clock,
+  Building2, Loader2,
   AlertCircle, Lock, Target,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
@@ -141,14 +141,6 @@ function healthColor(health: string): { color: string; bg: string } {
   }
 }
 
-function severityColor(sev: string): { color: string; bg: string } {
-  switch (sev) {
-    case 'CRITICAL': return { color: 'var(--state-error)',   bg: 'var(--state-error-soft)'   };
-    case 'HIGH':     return { color: 'var(--state-warning)', bg: 'var(--state-warning-soft)' };
-    default:         return { color: 'var(--text-muted)',    bg: 'var(--bg-muted)'            };
-  }
-}
-
 export function fmtMetric(v: number | null, suffix = ''): string {
   return v === null ? 'N/A' : `${v}${suffix}`;
 }
@@ -169,11 +161,6 @@ function timeAgo(iso: string): string {
   if (hours > 0) return `${hours}h ago`;
   if (mins > 0)  return `${mins}m ago`;
   return 'just now';
-}
-
-function fmtDate(iso: string | null | undefined): string {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
 export function getFirstName(fullName: string): string {
@@ -512,18 +499,14 @@ export default function ExecutiveDashboardPage() {
 
   if (!data) return null;
 
-  const { summary, attentionItems, organizationHealth, pendingDecisions, trends, departmentPerformance, significantActivity } = data;
+  const { summary, organizationHealth, trends, departmentPerformance, significantActivity } = data;
   const hasNoWorkspaceAccess = summary.activeWorkspaces === 0 && organizationHealth.length === 0;
   const canManageUsers = user?.permissions?.includes('users.manage') ?? false;
-  const summaryItems = hasNoWorkspaceAccess ? [] : buildExecSummary(data);
 
-  // KPI statuses
-  const compStatus      = metricStatus(summary.complianceHealth);
+  // KPI statuses (Compliance Health and Pending Decisions removed per Unit 66.2)
   const critStatus: KpiStatus   = summary.criticalIssues > 0 ? 'error'   : 'success';
   const overdueStatus: KpiStatus = summary.overdueActions > 0 ? 'warning' : 'success';
-  const pendingStatus: KpiStatus = summary.pendingDecisionsCount > 0 ? 'warning' : 'neutral';
   const expiryStatus: KpiStatus  = summary.expiringFiles > 0 ? 'error'   : 'success';
-  const awaitStatus: KpiStatus   = summary.tasksAwaitingReview > 0 ? 'warning' : 'neutral';
   const rateStatus      = metricStatus(summary.completionRate, 70, 40);
 
   return (
@@ -565,7 +548,7 @@ export default function ExecutiveDashboardPage() {
               </h1>
               {!hasNoWorkspaceAccess && (
                 <p className="mt-0.5 text-sm" style={{ color: 'var(--text-muted)', maxWidth: '70ch' }}>
-                  Here is the latest view of organizational performance, compliance risk, pending decisions, and operational priorities.
+                  Here is the latest view of organizational performance, operational health, and key compliance metrics across all active workspaces.
                 </p>
               )}
             </div>
@@ -604,8 +587,8 @@ export default function ExecutiveDashboardPage() {
             </p>
             <p className="mt-1.5 text-sm max-w-md" style={{ color: 'var(--text-muted)' }}>
               This executive account does not currently have access to any operational workspaces.
-              Assign approved workspaces to display organizational performance, compliance risks,
-              pending decisions, and key priorities.
+              Assign approved workspaces to display organizational performance, compliance metrics,
+              and operational priorities.
             </p>
           </div>
           {canManageUsers ? (
@@ -632,15 +615,8 @@ export default function ExecutiveDashboardPage() {
               transition: reducedMotion ? 'none' : 'box-shadow 0.7s ease',
             }}
           >
-            {/* Primary KPIs — 6 strategic metrics */}
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-              <KpiCard
-                label="Compliance Health"
-                value={summary.complianceHealth !== null ? `${summary.complianceHealth}%` : null}
-                icon={Shield} status={compStatus}
-                subtext="Weighted compliance score"
-                reducedMotion={reducedMotion}
-              />
+            {/* Primary KPIs — 4 operational metrics */}
+            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
               <KpiCard
                 label="Active Workspaces"
                 value={summary.activeWorkspaces}
@@ -660,13 +636,6 @@ export default function ExecutiveDashboardPage() {
                 value={summary.overdueActions}
                 icon={Clock} status={overdueStatus}
                 subtext={summary.overdueActions === 0 ? 'All tasks on schedule' : 'Tasks and actions past due'}
-                reducedMotion={reducedMotion}
-              />
-              <KpiCard
-                label="Pending Decisions"
-                value={summary.pendingDecisionsCount}
-                icon={FileText} status={pendingStatus}
-                subtext={summary.pendingDecisionsCount === 0 ? 'No pending approvals' : 'Documents awaiting approval'}
                 reducedMotion={reducedMotion}
               />
               <KpiCard
@@ -738,129 +707,6 @@ export default function ExecutiveDashboardPage() {
                   <CheckCircle2 className="h-5 w-5 shrink-0" style={{ color: 'var(--text-disabled)' }} />
                 </div>
               </div>
-            </div>
-          </div>
-
-          {/* ── Executive Summary Strip ────────────────────────────────────────── */}
-          {summaryItems.length > 0 && (
-            <div
-              className="rounded-xl border px-5 py-4"
-              style={{ backgroundColor: 'var(--bg-subtle)', borderColor: 'var(--border-default)' }}
-            >
-              <p className="mb-3 text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
-                Executive Summary
-              </p>
-              <div className="flex flex-wrap gap-x-8 gap-y-2">
-                {summaryItems.map((item) => (
-                  <div key={item.label} className="flex items-baseline gap-1.5">
-                    <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>{item.label}:</span>
-                    <span className="text-xs font-bold" style={{ color: item.color }}>{item.value}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ── Attention + Decisions ──────────────────────────────────────────── */}
-          <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-
-            {/* Requires Executive Attention */}
-            <div className="rounded-xl border shadow-sm overflow-hidden"
-              style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
-              <SectionHeader
-                title="Requires Executive Attention"
-                count={attentionItems.length}
-                countColor={attentionItems.length > 0 ? 'var(--state-error)' : 'var(--state-success)'}
-              />
-              {attentionItems.length === 0 ? (
-                <div className="flex flex-col items-center justify-center gap-2 py-6">
-                  <CheckCircle2 className="h-5 w-5" style={{ color: 'var(--state-success)' }} />
-                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                    No items currently require executive attention.
-                  </span>
-                </div>
-              ) : (
-                <div className="divide-y" style={{ '--divide-color': 'var(--border-default)' } as React.CSSProperties}>
-                  {attentionItems.slice(0, 8).map((item) => {
-                    const sev = severityColor(item.severity);
-                    const typeHref = item.type === 'TASK' ? '/tasks' : item.type === 'DOCUMENT' ? '/documents' : '/ncr-capa';
-                    return (
-                      <div key={`${item.type}-${item.id}`} className="px-5 py-3"
-                        style={{ borderBottomColor: 'var(--border-default)' }}>
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="text-[11px] font-bold px-1.5 py-0.5 rounded"
-                                style={{ backgroundColor: sev.bg, color: sev.color }}>
-                                {item.severity}
-                              </span>
-                              <span className="truncate text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-                                {item.title}
-                              </span>
-                            </div>
-                            <div className="mt-1 flex items-center gap-3 text-xs" style={{ color: 'var(--text-muted)' }}>
-                              {item.workspace && <span>{item.workspace}</span>}
-                              {item.responsible && <span>{item.responsible}</span>}
-                              {item.overdueAge && (
-                                <span className="font-semibold" style={{ color: 'var(--state-error)' }}>
-                                  {item.overdueAge}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                          <Link href={typeHref}
-                            className="shrink-0 flex items-center gap-0.5 text-xs font-semibold"
-                            style={{ color: 'var(--accent-primary)' }}>
-                            View <ChevronRight className="h-3 w-3" />
-                          </Link>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* Decisions Awaiting You */}
-            <div className="rounded-xl border shadow-sm overflow-hidden"
-              style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
-              <SectionHeader
-                title="Decisions Awaiting You"
-                count={pendingDecisions.length}
-                countColor={pendingDecisions.length > 0 ? 'var(--state-warning)' : 'var(--state-success)'}
-              />
-              {pendingDecisions.length === 0 ? (
-                <div className="flex flex-col items-center justify-center gap-2 py-6">
-                  <CheckCircle2 className="h-5 w-5" style={{ color: 'var(--state-success)' }} />
-                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                    No executive decisions are currently pending.
-                  </span>
-                </div>
-              ) : (
-                <div className="divide-y">
-                  {pendingDecisions.slice(0, 8).map((d) => (
-                    <div key={d.id} className="px-5 py-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
-                            {d.title}
-                          </div>
-                          <div className="mt-1 flex items-center gap-3 text-xs" style={{ color: 'var(--text-muted)' }}>
-                            {d.department && <span>{d.department}</span>}
-                            <span>By {d.requester}</span>
-                            <span>{fmtDate(d.submittedAt)}</span>
-                          </div>
-                        </div>
-                        <Link href={`/documents/${d.id}`}
-                          className="shrink-0 flex items-center gap-0.5 text-xs font-semibold"
-                          style={{ color: 'var(--accent-primary)' }}>
-                          Review <ChevronRight className="h-3 w-3" />
-                        </Link>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
           </div>
 

@@ -24,7 +24,8 @@ export class WorkspacesController {
   findAll(@CurrentUser() user: Record<string, unknown>) {
     const roles = extractUserRoles(user);
     const dept = user.department as { id: string } | null;
-    return this.svc.findAll(user.id as string, roles, dept?.id ?? null);
+    const visibilityMode = (user.workspaceVisibilityMode as string | undefined) ?? 'SELECTED';
+    return this.svc.findAll(user.id as string, roles, dept?.id ?? null, visibilityMode);
   }
 
   @Get(':id')

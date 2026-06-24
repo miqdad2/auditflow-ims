@@ -98,6 +98,16 @@
 - Users must only access documents, tasks, and evidence allowed by their role/department/project permissions.
 - Auditor/viewer users must not mutate ISO records.
 
+## Executive Workspace Visibility Rules
+
+- `workspaceVisibilityMode = 'ALL'` extends read access to all workspaces for executive users.
+- `WorkspacesService.assertWorkspaceAccess()` accepts an optional `visibilityMode?` parameter. When not provided, the service looks up the user's `workspaceVisibilityMode` from the DB (single PK lookup, only runs for non-elevated non-member users).
+- `WorkspacesService.findAll()` accepts a `visibilityMode` parameter; the controller must pass `user.workspaceVisibilityMode` to enable ALL scope for the workspace list.
+- ALL visibility must NOT grant elevated roles, write permissions, or admin authority.
+- Backend authorization is always enforced — ALL visibility is not a bypass; it only grants the equivalent of VIEWER-level access.
+- `DashboardService.getExecutiveSummary()` already accepts and respects `visibilityMode` — no changes needed there.
+- Never hardcode a specific user ID into executive visibility logic. The behavior must work for any future executive user with `workspaceVisibilityMode = 'ALL'`.
+
 ## Permanent Deletion Rules
 
 - **Only SUPER_ADMIN can permanently delete tasks or task lists.** All other roles (SUPER_USER, ISO_MANAGER, QHSE_USER, IT_ADMIN, DEPARTMENT_MANAGER, STAFF) are denied with HTTP 403.

@@ -176,6 +176,34 @@
 12. The MVP must run locally with PostgreSQL and local file storage without requiring paid cloud services.
 13. RECAFCO branding must be used consistently in the UI and must not be replaced with generic SaaS branding.
 
+## Executive Dashboard and Workspace Visibility
+
+The system supports a dedicated Executive Dashboard experience controlled by two User fields:
+
+- `dashboardExperience: STANDARD | EXECUTIVE` — controls which dashboard is shown at login and which sidebar items appear.
+- `workspaceVisibilityMode: SELECTED | ALL` — controls workspace scope for executive users.
+
+### ALL Workspace Visibility
+
+When `workspaceVisibilityMode = 'ALL'`:
+- `WorkspacesService.findAll()` returns all workspaces (no membership filter) — same as elevated role scope.
+- `WorkspacesService.assertWorkspaceAccess()` allows access to any workspace — equivalent to VIEWER-level access.
+- `DashboardService.getExecutiveSummary()` aggregates all active workspaces globally.
+- New workspaces are automatically visible — no manual assignment required.
+
+ALL visibility does NOT grant:
+- Elevated system roles (SUPER_ADMIN, SUPER_USER, etc.)
+- Permission to create, edit, or delete tasks, documents, or issues.
+- Admin Settings, System Health, System Errors, or User Management access.
+- Permanent-delete authority.
+
+Backend authorization is always enforced. `assertWorkspaceAccess` with ALL mode grants read access only; all mutation endpoints independently require specific permissions that Normal Users do not hold.
+
+### Executive Sidebar
+
+Users with `dashboardExperience = EXECUTIVE` see: Dashboard → ISO Workspaces → Reports → Notifications.
+Technical admin items (Admin Settings, System Health, System Errors) are only shown when the same account separately has SUPER_ADMIN or IT_ADMIN system access roles.
+
 ## Future Integration Notes
 
 - The system is separate from the maintenance system in phase 1.
