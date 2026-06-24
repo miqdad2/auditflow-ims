@@ -1,8 +1,10 @@
 # Company Server Update Procedure — AuditFlow IMS
 
-Release: auditflow-ims-2026-06-22-r1  
-Date: 2026-06-22  
+Release: auditflow-ims-2026-06-24-r3  
+Commit: 7cfddfa  
+Date: 2026-06-24  
 Target: RECAFCO company Windows server  
+Previous release: auditflow-ims-2026-06-22-r1 (commit 994d993)
 
 **DO NOT PROCEED WITHOUT READING rollback-plan.md FIRST.**  
 **DO NOT EXECUTE THIS PROCEDURE WITHOUT A COMPLETED DATABASE BACKUP.**
@@ -13,7 +15,7 @@ Target: RECAFCO company Windows server
 
 - [ ] All modified files committed and pushed to git main branch
 - [ ] `pnpm --filter api build` exits 0 on the release machine
-- [ ] `pnpm --filter web build` exits 0 on the release machine (21 routes)
+- [ ] `pnpm --filter web build` exits 0 on the release machine (22 routes — adds /executive-dashboard)
 - [ ] Pre-deployment database backup completed and verified (see Section 2)
 - [ ] Pre-deployment file backup completed and verified (see Section 3)
 - [ ] Pre-deployment count baseline recorded (see production-data-baseline.md)
@@ -142,7 +144,16 @@ pnpm exec prisma migrate status
 REM Review output carefully:
 REM   Applied: migrations already in production DB
 REM   Pending: migrations that will run on deploy
-REM   NOTE: 15 total migrations expected. Production may have fewer if on older version.
+REM
+REM   Release auditflow-ims-2026-06-24-r3: 19 total migrations.
+REM   If server is on auditflow-ims-2026-06-22-r1 (15 migrations applied),
+REM   expect 4 PENDING migrations:
+REM     20260623000000_add_task_approval_status
+REM     20260623010000_add_file_validity_period
+REM     20260624000000_add_job_title_dashboard_experience
+REM     20260624010000_add_workspace_visibility_mode
+REM
+REM   Run Step 2 of pre-deployment-checklist.md before migration.
 ```
 
 ---
@@ -159,15 +170,21 @@ REM STOP if: any migration failure, constraint violation, error output
 
 ---
 
-## Section 8 — Permission Reconciliation (Safe Upsert)
+## Section 8 — Permission Reconciliation (Safe Upsert — CONDITIONAL)
 
-Run the seed ONLY for permissions/roles (not demo users):
+**Unit 66 audit finding: Seed is NOT required for this release.**
+All new fields (dashboardExperience, workspaceVisibilityMode, jobTitle, approval_status, validity_period)
+have safe defaults from migration SQL and do not require seed updates.
+
+Run the seed ONLY if a specific new permission key was added to the seed and is required by the new release.
+If running seed:
 
 ```cmd
 cd packages\db
 pnpm exec ts-node prisma/seed.ts
 REM The seed uses upsert — it will NOT create demo users, reset passwords,
 REM or remove existing data. It WILL add missing permissions and role mappings.
+REM Admin user update branch is update:{} — existing password and fields are preserved.
 ```
 
 ---
@@ -198,13 +215,16 @@ REM taskkill /PID <pid> /F
 Create or update PM2 ecosystem file:
 
 ```js
-// C:\RecafcoServer\releases\auditflow-ims-2026-06-22-r1\ecosystem.config.js
+// C:\RecafcoServer\releases\auditflow-ims-2026-06-24-r3\ecosystem.config.js
+// NOTE: There is NO start-web.cmd in the repository. The web process is started
+// via node_modules/.bin/next with 'start -p 3000' args. This is the authoritative
+// web startup method for all PM2 deployments.
 module.exports = {
   apps: [
     {
       name: 'auditflow-api',
       script: 'dist/main.js',
-      cwd: 'C:\\RecafcoServer\\releases\\auditflow-ims-2026-06-22-r1\\apps\\api',
+      cwd: 'C:\\RecafcoServer\\releases\\auditflow-ims-2026-06-24-r3\\apps\\api',
       env: {
         NODE_ENV: 'production',
       },
@@ -220,7 +240,7 @@ module.exports = {
       name: 'auditflow-web',
       script: 'node_modules/.bin/next',
       args: 'start -p 3000',
-      cwd: 'C:\\RecafcoServer\\releases\\auditflow-ims-2026-06-22-r1\\apps\\web',
+      cwd: 'C:\\RecafcoServer\\releases\\auditflow-ims-2026-06-24-r3\\apps\\web',
       env: {
         NODE_ENV: 'production',
       },

@@ -1,10 +1,31 @@
 # Production Pre-Flight Checklist — AuditFlow IMS
 
-Release: auditflow-ims-2026-06-24-r2  
-Commit: ddb297d (HEAD — all Unit 63.x through 64.3 changes committed)
+Release: auditflow-ims-2026-06-24-r3  
+Commit: 7cfddfa (HEAD — all Unit 63.x through 65.6 changes committed)
 Date: 2026-06-24
 
-## Unit 64.3 — Readiness Verification Summary (2026-06-24)
+## Unit 66 — Final Safety Audit (2026-06-24)
+
+| Check | Result |
+|---|---|
+| Working tree | ✅ CLEAN — all changes committed (7cfddfa) |
+| API test suite | ✅ 531 total, 521 pass, 10 skip, 0 fail |
+| API build | ✅ EXIT:0, dist/main.js verified |
+| Web build (production env) | ✅ EXIT:0, 22 routes (adds /executive-dashboard) |
+| Prisma schema validate | ✅ Schema is valid |
+| Prisma migration status | ✅ 19 migrations, all applied locally, DB up to date |
+| Prisma generate | ✅ Client v7.8.0 generated clean |
+| Git diff --check | ✅ No whitespace errors |
+| Port-4000 in bundle (source) | ✅ No hardcoded port in API call source |
+| Port-4000 in bundle (display only) | ⚠️ In admin/settings system-info page (static display text, not API calls — acceptable) |
+| Socket.IO path in bundle | ✅ /socket.io path explicit in socket provider |
+| Single-origin socket URL | ✅ SOCKET_URL_ENV empty → window.location.origin in production |
+| Caddy locally installed | ❌ Not installed locally — proxy test pending deployment window |
+| Two-browser realtime test | ❌ NOT completed — first-window gate on deployment day |
+| Disconnect/reconnect test | ❌ NOT completed — first-window gate on deployment day |
+| Deployment docs updated | ✅ New: pre-deployment-checklist.md, deployment-day-checklist.md, rollback-procedure.md |
+
+## Unit 64.3 — Readiness Verification Summary (2026-06-24) [archived]
 
 | Check | Result |
 |---|---|

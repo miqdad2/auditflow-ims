@@ -1,7 +1,7 @@
 # Environment Variable Checklist — AuditFlow IMS Production
 
-Generated: 2026-06-22  
-Release: auditflow-ims-2026-06-22-r1
+Generated: 2026-06-24 (updated for Unit 66 / release auditflow-ims-2026-06-24-r3)
+Previous: 2026-06-22 / auditflow-ims-2026-06-22-r1
 
 ---
 
@@ -26,11 +26,27 @@ Release: auditflow-ims-2026-06-22-r1
 
 ---
 
-## apps/web/.env.local (on production server)
+## apps/web/.env (on production server — SINGLE-ORIGIN MODEL)
 
-| Variable | Required | Current Dev Value | Production Action Required |
+**UPDATED for Unit 64 single-origin Caddy model. The legacy direct-port model below is no longer recommended.**
+
+| Variable | Required | Production Value | Notes |
 |---|---|---|---|
-| `NEXT_PUBLIC_API_URL` | YES | `http://localhost:4000` | **MUST CHANGE** to server LAN URL: `http://192.168.x.x:4000` |
+| `NEXT_PUBLIC_API_URL` | YES | `/api` | Caddy strips `/api` prefix before forwarding to NestJS port 4000 |
+| `NEXT_PUBLIC_SOCKET_URL` | YES | `` (empty string) | Empty = socket.io-client uses `window.location.origin`, routed through Caddy `/socket.io/*` |
+| `DATABASE_URL` | optional | _(same as api)_ | Only needed for Prisma migrations; use packages/db/.env instead |
+
+**Critical:** Set these values in `apps/web/.env` before running `pnpm --filter web build` on the server.
+If `apps/web/.env.local` also exists with old values (`http://localhost:4000`), it will OVERRIDE `.env`.
+On the production server, ensure `.env.local` does NOT exist with conflicting values.
+
+### Legacy direct-port model (NOT recommended for production)
+The old model had browsers connecting directly to port 4000:
+```
+NEXT_PUBLIC_API_URL=http://192.168.x.x:4000   ← requires port 4000 open to network
+NEXT_PUBLIC_SOCKET_URL=http://192.168.x.x:4000
+```
+This bypasses Caddy for API and WebSocket traffic. Use the single-origin model instead.
 
 ---
 
