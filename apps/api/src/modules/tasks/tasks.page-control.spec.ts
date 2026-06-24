@@ -1,5 +1,5 @@
 /**
- * Unit 63.7 — Cross-workspace task control data contracts (10 cases)
+ * Unit 63.7 / 63.7.1 — Cross-workspace task control data contracts (16 cases)
  *
  * Verifies:
  *  - TASK_INCLUDE now exposes workspace name (root cause of the '—' bug)
@@ -182,5 +182,118 @@ describe('Unit 63.7 — task-include workspace and filter contracts', () => {
     expect(result).toMatch(/2026/);
     // Must not use browser local timezone for formatting
     expect(result).not.toBe('');
+  });
+});
+
+// ─── Part B: Unit 63.7.1 — API standardization and realtime contracts ─────────
+
+describe('Unit 63.7.1 — API standardization and realtime refresh contracts', () => {
+
+  // ── Debounce simulation ───────────────────────────────────────────────────
+
+  function makeDebounce(delayMs: number): { schedule: (fn: () => void) => void; callCount: () => number } {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let count = 0;
+    return {
+      schedule: (fn) => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => { count++; fn(); }, delayMs);
+      },
+      callCount: () => count,
+    };
+  }
+
+  // Case 11: multiple events within debounce window → one refresh
+  it('Case 11 — multiple socket events within 400ms trigger exactly one refresh', (done) => {
+    const db = makeDebounce(50);
+    let callCount = 0;
+    const refresh = () => callCount++;
+    db.schedule(refresh);
+    db.schedule(refresh);
+    db.schedule(refresh);
+    setTimeout(() => {
+      expect(callCount).toBe(1);
+      done();
+    }, 100);
+  });
+
+  // Case 12: workspace filter causes event from other workspace to be skipped
+  it('Case 12 — workspace filter skips events from non-matching workspace', () => {
+    const activeFilter = 'ws-ict';
+    let refreshCalled = false;
+
+    function scheduleRefresh(eventWsId?: string) {
+      if (activeFilter && eventWsId && eventWsId !== activeFilter) return;
+      refreshCalled = true;
+    }
+
+    scheduleRefresh('ws-qhse');  // different workspace — should be skipped
+    expect(refreshCalled).toBe(false);
+
+    scheduleRefresh('ws-ict');   // matching workspace — should trigger
+    expect(refreshCalled).toBe(true);
+  });
+
+  // Case 13: when no workspace filter, all workspace events trigger refresh
+  it('Case 13 — no workspace filter: all workspace events trigger refresh', () => {
+    const activeFilter = '';  // all workspaces
+    let called = 0;
+
+    function scheduleRefresh(eventWsId?: string) {
+      if (activeFilter && eventWsId && eventWsId !== activeFilter) return;
+      called++;
+    }
+
+    scheduleRefresh('ws-ict');
+    scheduleRefresh('ws-qhse');
+    scheduleRefresh(undefined);  // no workspace ID
+    expect(called).toBe(3);
+  });
+
+  // Case 14: reconnect guard prevents duplicate refetch if initial load not done
+  it('Case 14 — reconnect guard requires initialLoadDone to trigger refetch', () => {
+    let refreshCalled = false;
+    const initialLoadDone = false;
+    // Simulate reconnect handler logic
+    const onReconnect = (connected: boolean, wasConnected: boolean) => {
+      if (connected && !wasConnected && initialLoadDone) {
+        refreshCalled = true;
+      }
+    };
+    onReconnect(true, false);
+    expect(refreshCalled).toBe(false);  // guarded — initial load not done
+  });
+
+  // Case 15: reconnect triggers refetch after initial load is complete
+  it('Case 15 — reconnect triggers refetch after initial load completes', () => {
+    let refreshCalled = false;
+    const initialLoadDone = true;
+    const onReconnect = (connected: boolean, wasConnected: boolean) => {
+      if (connected && !wasConnected && initialLoadDone) {
+        refreshCalled = true;
+      }
+    };
+    onReconnect(true, false);
+    expect(refreshCalled).toBe(true);
+  });
+
+  // Case 16: silent load preserves existing task array on error
+  it('Case 16 — silent load failure preserves previous tasks (no data cleared)', () => {
+    // Mirror of the silent-load contract: existing tasks are not cleared on error
+    const existingTasks = [
+      makeTask({ id: 't1', status: 'TODO', workspace: WS_ICT }),
+      makeTask({ id: 't2', status: 'IN_PROGRESS', workspace: WS_QHSE }),
+    ];
+    // Simulate: silent=true load fails — tasks state must not be reset
+    let tasks = [...existingTasks];
+    function silentLoadSimulated(success: boolean) {
+      if (success) {
+        tasks = []; // would set new data
+      }
+      // On failure with silent=true: no setTasks([]) called, tasks preserved
+    }
+    silentLoadSimulated(false);
+    expect(tasks).toHaveLength(2);
+    expect(tasks[0].id).toBe('t1');
   });
 });

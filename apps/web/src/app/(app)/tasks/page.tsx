@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
+import { useSocket } from '@/lib/socket-provider';
 import { apiGet, apiPatchAuth, ApiError } from '@/lib/api';
 import {
   TASK_STATUS_TRANSITIONS, TASK_STATUS_DISPLAY_NAMES, STATUS_CONFIRM_CONFIG,
@@ -149,13 +150,13 @@ const OPEN_STATUSES = new Set(['TODO', 'IN_PROGRESS', 'WAITING_REVIEW', 'REJECTE
 
 export default function TasksPage() {
   const { user, token } = useAuth();
+  const { socket, connected, joinWorkspace } = useSocket();
   const searchParams    = useSearchParams();
 
   const roles       = user?.roles ?? [];
   const isElevated  = roles.some((r) => ELEVATED_ROLES.includes(r));
   const isSuperRole = roles.some((r) => SUPER_ROLES.includes(r));
   const isSuperUser = isElevated; // both super and ISO/QHSE get business table
-  const base        = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
   const rawView   = searchParams.get('view') as ViewKey | null;
   const defaultView: ViewKey = isSuperUser ? 'all' : 'open';
@@ -187,19 +188,24 @@ export default function TasksPage() {
   const [eligibleLoadingWs, setEligibleLoadingWs]     = useState<Set<string>>(new Set());
   const assigneeDropdownRef = useRef<HTMLDivElement | null>(null);
 
+  // Realtime refresh infrastructure
+  const refreshTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const initialLoadDoneRef = useRef(false);
+  const prevConnectedRef   = useRef(false);
+  const filterWsIdRef      = useRef(filterWsId); // stable ref to avoid stale closure in socket handlers
+  useEffect(() => { filterWsIdRef.current = filterWsId; }, [filterWsId]);
+
   const statusTier: StatusTier = isElevated ? 'ELEVATED' : 'MEMBER';
 
   useEffect(() => { if (rawView) setView(rawView as ViewKey); }, [rawView]);
 
-  const load = useCallback(async () => {
+  // silent=true: used for realtime/reconnect refresh — no loading spinner, preserves existing data on failure
+  const load = useCallback(async (silent = false) => {
     if (!token || !user?.id) return;
-    setLoading(true);
-    setError('');
+    if (!silent) { setLoading(true); setError(''); }
     try {
       if (isSuperUser) {
-        const res = await fetch(`${base}/tasks`, { headers: { Authorization: `Bearer ${token}` } });
-        if (!res.ok) throw new Error('Failed to load tasks');
-        const data = await res.json() as Task[];
+        const data = await apiGet<Task[]>('/tasks', token);
         setTasks(data);
         setSummaryData(null);
       } else {
@@ -207,14 +213,65 @@ export default function TasksPage() {
         setTasks(data.tasks);
         setSummaryData(data.summary);
       }
+      initialLoadDoneRef.current = true;
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to load tasks.');
+      // On silent refresh: keep existing data, skip error display
+      // On explicit load: show friendly error
+      if (!silent) {
+        setError(err instanceof Error ? err.message : 'Unable to load tasks. Retry.');
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
-  }, [base, token, user?.id, isSuperUser]);
+  }, [token, user?.id, isSuperUser]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Debounced realtime refresh — preserves all filters; 400ms coalesces burst events
+  function scheduleTaskRefresh(eventWsId?: string) {
+    // If a workspace filter is active, skip events from other workspaces
+    if (filterWsIdRef.current && eventWsId && eventWsId !== filterWsIdRef.current) return;
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = setTimeout(() => void load(true), 400);
+  }
+
+  // Join workspace rooms so socket events from those workspaces reach this page
+  useEffect(() => {
+    if (!isElevated || tasks.length === 0) return;
+    const wsIds = [...new Set(
+      tasks.map((t) => t.workspace?.id ?? t.workspaceId).filter(Boolean) as string[],
+    )];
+    wsIds.forEach((id) => joinWorkspace(id));
+  }, [tasks, isElevated, joinWorkspace]);
+
+  // Reconnect: refetch once when socket reconnects after a disconnect
+  useEffect(() => {
+    if (connected && !prevConnectedRef.current && initialLoadDoneRef.current) {
+      void load(true);
+    }
+    prevConnectedRef.current = connected;
+  }, [connected, load]);
+
+  // Socket event listeners for task changes (elevated/super user only)
+  useEffect(() => {
+    if (!socket || !isElevated) return;
+    const onTaskCreated = (p: { workspaceId?: string }) => scheduleTaskRefresh(p.workspaceId);
+    const onTaskUpdated = (p: { workspaceId?: string }) => scheduleTaskRefresh(p.workspaceId);
+    const onTaskDeleted = (p: { workspaceId?: string }) => scheduleTaskRefresh(p.workspaceId);
+    const onTaskMoved   = (p: { workspaceId?: string }) => scheduleTaskRefresh(p.workspaceId);
+    socket.on('task.created', onTaskCreated);
+    socket.on('task.updated', onTaskUpdated);
+    socket.on('task.deleted', onTaskDeleted);
+    socket.on('task.moved',   onTaskMoved);
+    return () => {
+      socket.off('task.created', onTaskCreated);
+      socket.off('task.updated', onTaskUpdated);
+      socket.off('task.deleted', onTaskDeleted);
+      socket.off('task.moved',   onTaskMoved);
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [socket, isElevated]);
 
   // Close menus on outside click
   useEffect(() => {
@@ -299,19 +356,15 @@ export default function TasksPage() {
     setStatusDialogError('');
     setPatchLoading(statusDialogTask.id);
     try {
-      const res = await fetch(`${base}/tasks/${statusDialogTask.id}/status`, {
-        method: 'PATCH',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      await apiPatchAuth(
+        `/tasks/${statusDialogTask.id}/status`,
+        {
           newStatus: statusDialogTarget,
           reason: statusDialogReason.trim() || undefined,
           source: 'GLOBAL_TASK_CONTROL',
-        }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({})) as { message?: string };
-        throw new Error(body.message ?? 'Failed to change status');
-      }
+        },
+        token,
+      );
       setTasks((prev) => prev.map((t) => t.id === statusDialogTask!.id ? { ...t, status: statusDialogTarget! } : t));
       closeStatusDialog();
     } catch (err: unknown) {
