@@ -310,7 +310,7 @@ export default function ReportsPage() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold" style={{ color: 'var(--text-primary)' }}>
-            Business Operations &amp; Compliance Report
+            Operations &amp; Compliance Report
           </h1>
           <p className="mt-0.5 text-sm" style={{ color: 'var(--text-muted)' }}>
             RECAFCO workspace, task, document, issue, and expiry summary · {today}
@@ -923,7 +923,7 @@ export default function ReportsPage() {
           {/* ── Print-only header (hidden on screen, visible in print) ─── */}
           <div className="hidden print:block rounded-xl border p-4 text-xs" style={{ borderColor: 'var(--border-default)' }}>
             <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>
-              RECAFCO AuditFlow IMS — Business Operations &amp; Compliance Report
+              RECAFCO AuditFlow IMS — Operations &amp; Compliance Report
             </p>
             <p style={{ color: 'var(--text-secondary)' }}>
               Reporting period: {fmtDate(dateFrom)} – {fmtDate(dateTo)}
