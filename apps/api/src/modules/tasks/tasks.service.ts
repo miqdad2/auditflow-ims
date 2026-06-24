@@ -78,10 +78,11 @@ export function computeNextDueDate(baseDue: Date, interval: string, now: Date): 
 }
 
 const TASK_INCLUDE = {
-  assignee: { select: { id: true, fullName: true, email: true } },
+  assignee:  { select: { id: true, fullName: true, email: true } },
   createdBy: { select: { id: true, fullName: true } },
-  taskList: { select: { id: true, name: true } },
-  _count: { select: { subtasks: true, comments: true } },
+  taskList:  { select: { id: true, name: true } },
+  workspace: { select: { id: true, name: true } },
+  _count:    { select: { subtasks: true, comments: true } },
 } as const;
 
 @Injectable()
