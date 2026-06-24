@@ -1,9 +1,11 @@
 /**
- * Unit 63.6 / 63.6.1 — Temporary and permanent password policy tests (20 cases)
+ * Unit 63.6 / 63.6.1 / 65.2 — Temporary and permanent password policy tests
  *
  * Verifies that:
  *   - Temporary passwords (admin-created) require only 3+ characters
  *   - Permanent passwords require full complexity (8+ chars, upper, lower, digit, special)
+ *   - Login accepts 3-character passwords (for temporary-password flow)
+ *   - Login rejects 2-character passwords
  *   - PermissionsGuard blocks requests from users with mustChangePassword=true
  *   - PermissionsGuard allows /auth/change-password (no @RequirePermissions decorator)
  *
@@ -19,6 +21,7 @@ import { ForbiddenException } from '@nestjs/common';
 import { CreateUserDto } from '../users/dto/create-user.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { ResetPasswordDto } from '../users/dto/reset-password.dto';
+import { LoginDto } from './dto/login.dto';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -217,5 +220,88 @@ describe('Unit 63.6.1 — PermissionsGuard mustChangePassword runs before early 
     expect(errors.some((e) =>
       e.toLowerCase().includes('8') || e.toLowerCase().includes('uppercase') || e.toLowerCase().includes('lowercase'),
     )).toBe(true);
+  });
+});
+
+// ─── Part F: LoginDto — 3-character temporary password (Unit 65.2) ────────────
+
+describe('Unit 65.2 — login accepts 3-character temporary passwords (LoginDto)', () => {
+
+  // Case 21: 3-character password is accepted at login
+  it('Case 21 — LoginDto accepts password "123" (3 chars)', async () => {
+    const errors = await validateDto(LoginDto, { login: 'user@recafco.com', password: '123' });
+    const pwErrors = errors.filter((e) => e.toLowerCase().includes('password') || e.toLowerCase().includes('3') || e.toLowerCase().includes('6'));
+    expect(pwErrors).toHaveLength(0);
+  });
+
+  // Case 22: 3-character username/word password accepted
+  it('Case 22 — LoginDto accepts password "abc" (3 chars)', async () => {
+    const errors = await validateDto(LoginDto, { login: 'user@recafco.com', password: 'abc' });
+    const pwErrors = errors.filter((e) => e.toLowerCase().includes('password') || e.toLowerCase().includes('6'));
+    expect(pwErrors).toHaveLength(0);
+  });
+
+  // Case 23: 2-character password is rejected
+  it('Case 23 — LoginDto rejects password "12" (2 chars)', async () => {
+    const errors = await validateDto(LoginDto, { login: 'user@recafco.com', password: '12' });
+    expect(errors.some((e) => e.toLowerCase().includes('3') || e.toLowerCase().includes('least'))).toBe(true);
+  });
+
+  // Case 24: 1-character password is rejected
+  it('Case 24 — LoginDto rejects password "1" (1 char)', async () => {
+    const errors = await validateDto(LoginDto, { login: 'user@recafco.com', password: '1' });
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  // Case 25: empty password is rejected
+  it('Case 25 — LoginDto rejects empty password', async () => {
+    const errors = await validateDto(LoginDto, { login: 'user@recafco.com', password: '' });
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  // Case 26: long strong password is accepted
+  it('Case 26 — LoginDto accepts a strong permanent password "Recafco@2026"', async () => {
+    const errors = await validateDto(LoginDto, { login: 'user@recafco.com', password: 'Recafco@2026' });
+    const pwErrors = errors.filter((e) => e.toLowerCase().includes('password'));
+    expect(pwErrors).toHaveLength(0);
+  });
+
+  // Case 27: ChangePasswordDto still rejects "123" (permanent password policy unchanged)
+  it('Case 27 — ChangePasswordDto still rejects "123" — permanent policy unchanged', async () => {
+    const errors = await validateDto(ChangePasswordDto, {
+      currentPassword: '123',
+      newPassword: '123',
+      confirmPassword: '123',
+    });
+    expect(errors.some((e) =>
+      e.toLowerCase().includes('8') || e.toLowerCase().includes('uppercase'),
+    )).toBe(true);
+  });
+
+  // Case 28: LoginDto and ChangePasswordDto have different minimum lengths
+  it('Case 28 — LoginDto min=3 and ChangePasswordDto min=8 serve different purposes', async () => {
+    // Login min=3: accepts "123" as login credential
+    const loginErrors = await validateDto(LoginDto, { login: 'user@recafco.com', password: '123' });
+    const loginPwErrors = loginErrors.filter((e) => e.toLowerCase().includes('password') || e.toLowerCase().includes('6'));
+    expect(loginPwErrors).toHaveLength(0);
+
+    // Change-password min=8: rejects "123" as new permanent password
+    const changeErrors = await validateDto(ChangePasswordDto, {
+      currentPassword: 'old',
+      newPassword: '123',
+      confirmPassword: '123',
+    });
+    expect(changeErrors.some((e) => e.toLowerCase().includes('8') || e.toLowerCase().includes('uppercase'))).toBe(true);
+  });
+
+  // Case 29: no migration is needed (schema unchanged)
+  it('Case 29 — no migration file added for Unit 65.2 (LoginDto is DTO-only, no schema change)', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const migrationsDir = path.resolve(__dirname, '../../../../packages/db/prisma/migrations');
+    const dirs = fs.existsSync(migrationsDir)
+      ? (fs.readdirSync(migrationsDir) as string[]).filter((d: string) => d.includes('65_2') || d.includes('65-2'))
+      : [];
+    expect(dirs).toHaveLength(0);
   });
 });
