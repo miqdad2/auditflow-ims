@@ -185,8 +185,6 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
   const [taskFilter, setTaskFilter] = useState<TaskFilter>('all'); // adjusted after auth loads
   const [taskSearch, setTaskSearch] = useState('');
   const [taskSort, setTaskSort]     = useState<TaskSort>('manual');
-  const [inlineTitle, setInlineTitle]       = useState('');
-  const [addingInline, setAddingInline]     = useState(false);
   const [openMenuId, setOpenMenuId]         = useState<string | null>(null);
   const [moveTaskId, setMoveTaskId]         = useState<string | null>(null);
   const [moveTargetListId, setMoveTargetListId] = useState('');
@@ -645,18 +643,6 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
   });
 
   // ── Actions ───────────────────────────────────────────────────────────────────
-
-  async function handleInlineAddTask() {
-    if (!token || !selectedListId || !inlineTitle.trim() || addingInline) return;
-    setAddingInline(true);
-    try {
-      const task = await apiPostAuth<TaskSummary>('/tasks', { title: inlineTitle.trim(), taskListId: selectedListId }, token);
-      setTasks((prev) => [...prev, task]);
-      setInlineTitle('');
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to create task');
-    } finally { setAddingInline(false); }
-  }
 
   async function handleDuplicate(taskId: string) {
     if (!token) return;
@@ -2796,31 +2782,6 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                           </tr>
                         ))}
                       </tbody>
-                      {/* Inline add task */}
-                      {canManage && (
-                        <tfoot>
-                          <tr style={{ borderTop: '1px solid var(--border-subtle)' }}>
-                            <td colSpan={7} className="px-4 py-2">
-                              <div className="flex items-center gap-2">
-                                {addingInline
-                                  ? <Loader2 className="h-3.5 w-3.5 animate-spin flex-shrink-0" style={{ color: 'var(--accent-primary)' }} />
-                                  : <Plus className="h-3.5 w-3.5 flex-shrink-0" style={{ color: 'var(--text-disabled)' }} />}
-                                <input type="text" placeholder="Add a task…" value={inlineTitle}
-                                  disabled={addingInline}
-                                  onChange={(e) => setInlineTitle(e.target.value)}
-                                  onKeyDown={(e) => { if (e.key === 'Enter') void handleInlineAddTask(); }}
-                                  className="flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--text-disabled)]"
-                                  style={{ color: 'var(--text-primary)' }} />
-                                {inlineTitle && (
-                                  <button type="button" onClick={() => setInlineTitle('')} style={{ color: 'var(--text-muted)' }}>
-                                    <X className="h-3.5 w-3.5" />
-                                  </button>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        </tfoot>
-                      )}
                     </table>
                   )}
                 </div>
