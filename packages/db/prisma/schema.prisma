@@ -85,6 +85,17 @@ enum DashboardExperience {
   EXECUTIVE
 }
 
+// ─── WorkspaceVisibilityMode ──────────────────────────────────────────────────
+// Controls how an Executive user's workspace scope is resolved in the executive
+// summary endpoint. SELECTED = explicit memberships only. ALL = company-wide
+// visibility within the executive summary (Super Admin grant only).
+// All other per-workspace routes still require explicit WorkspaceMember records.
+
+enum WorkspaceVisibilityMode {
+  SELECTED
+  ALL
+}
+
 // ─── User ─────────────────────────────────────────────────────────────────────
 
 model User {
@@ -99,8 +110,9 @@ model User {
   mustChangePassword  Boolean             @default(false)
   passwordChangedAt   DateTime?
   lastLoginAt         DateTime?
-  dashboardExperience DashboardExperience @default(STANDARD)
-  createdAt           DateTime            @default(now())
+  dashboardExperience     DashboardExperience     @default(STANDARD)
+  workspaceVisibilityMode WorkspaceVisibilityMode @default(SELECTED)
+  createdAt               DateTime                @default(now())
   updatedAt           DateTime            @updatedAt
 
   department                Department?           @relation(fields: [departmentId], references: [id])

@@ -17,7 +17,6 @@ import {
   Bug,
   Building2,
   Zap,
-  BarChart3,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 
@@ -47,6 +46,15 @@ const RESTRICTED_NAV = [
   { label: 'Dashboard',       href: '/dashboard',     icon: LayoutDashboard },
   { label: 'ISO Workspaces',  href: '/workspaces',    icon: FolderOpen },
   { label: 'My Tasks',        href: '/tasks',          icon: CheckSquare },
+  { label: 'Notifications',  href: '/notifications',   icon: Bell },
+];
+
+// Executive users: one Dashboard entry, Workspaces, Reports, Notifications. No My Tasks.
+// Dashboard href is resolved dynamically to /executive-dashboard in the render loop.
+const EXECUTIVE_NAV = [
+  { label: 'Dashboard',      href: '/dashboard',       icon: LayoutDashboard },
+  { label: 'ISO Workspaces', href: '/workspaces',      icon: FolderOpen },
+  { label: 'Reports',        href: '/reports',         icon: BarChart2 },
   { label: 'Notifications',  href: '/notifications',   icon: Bell },
 ];
 
@@ -112,11 +120,15 @@ export function AppSidebar() {
   const dashboardHref = isExecutiveDashboard ? '/executive-dashboard' : '/dashboard';
   const displayName = user?.fullName ?? 'User';
 
-  const navItems = isElevated
-    ? ALL_NAV
-    : isDept
-      ? DEPT_NAV
-      : RESTRICTED_NAV; // STAFF, AUDITOR_VIEWER
+  // Executive users always use EXECUTIVE_NAV regardless of system role.
+  // This gives one Dashboard entry (resolves to /executive-dashboard) and hides My Tasks.
+  const navItems = isExecutiveDashboard
+    ? EXECUTIVE_NAV
+    : isElevated
+      ? ALL_NAV
+      : isDept
+        ? DEPT_NAV
+        : RESTRICTED_NAV; // STAFF, AUDITOR_VIEWER
 
   return (
     <aside
@@ -180,18 +192,6 @@ export function AppSidebar() {
             const active = pathname === resolvedHref || pathname.startsWith(`${resolvedHref}/`);
             return <NavItem key={href} href={resolvedHref} icon={icon} label={label} active={active} />;
           })}
-
-          {/* Executive Dashboard: elevated users with EXECUTIVE dashboard experience */}
-          {isExecutiveDashboard && (
-            <li>
-              <NavItem
-                href="/executive-dashboard"
-                icon={BarChart3}
-                label="Executive Overview"
-                active={pathname.startsWith('/executive-dashboard')}
-              />
-            </li>
-          )}
 
           {/* Action Center: SUPER_USER, SUPER_ADMIN */}
           {canAccessActionCenter && (

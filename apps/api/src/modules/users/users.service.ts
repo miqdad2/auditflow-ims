@@ -43,6 +43,7 @@ const USER_SELECT = {
   mustChangePassword: true,
   lastLoginAt: true,
   dashboardExperience: true,
+  workspaceVisibilityMode: true,
   createdAt: true,
   updatedAt: true,
   department: { select: { id: true, name: true, code: true } },
@@ -143,8 +144,16 @@ export class UsersService {
     }
   }
 
+  // ALL workspace visibility mode is a company-wide grant — Super Admin only.
+  private assertVisibilityModeAllowed(mode: string | undefined, actorRoles: string[]) {
+    if (!mode || mode !== 'ALL') return;
+    if (actorRoles.includes('SUPER_ADMIN')) return;
+    throw new ForbiddenException('Only Super Admin may grant all-workspace executive visibility.');
+  }
+
   async create(dto: CreateUserDto, actorId: string, actorRoles: string[] = []) {
     await this.assertRoleAssignmentAllowed(dto.roleIds, actorRoles);
+    this.assertVisibilityModeAllowed(dto.workspaceVisibilityMode, actorRoles);
     const existing = await this.prisma.user.findFirst({
       where: { email: dto.email.toLowerCase() },
     });
@@ -171,6 +180,7 @@ export class UsersService {
         isActive: dto.isActive ?? true,
         mustChangePassword: true,
         dashboardExperience: dto.dashboardExperience ?? 'STANDARD',
+        workspaceVisibilityMode: dto.workspaceVisibilityMode ?? 'SELECTED',
         ...(dto.roleIds && dto.roleIds.length > 0
           ? {
               userRoles: {
@@ -197,6 +207,7 @@ export class UsersService {
   async update(id: string, dto: UpdateUserDto, actorId: string, actorRoles: string[] = []) {
     await this.assertCanTargetUser(id, actorRoles);
     await this.assertRoleAssignmentAllowed(dto.roleIds, actorRoles);
+    this.assertVisibilityModeAllowed(dto.workspaceVisibilityMode, actorRoles);
     const existing = await this.prisma.user.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('User not found');
 
@@ -205,6 +216,7 @@ export class UsersService {
     if (dto.departmentId !== undefined) updateData.departmentId = dto.departmentId;
     if (dto.jobTitle !== undefined) updateData.jobTitle = dto.jobTitle?.trim() || null;
     if (dto.dashboardExperience !== undefined) updateData.dashboardExperience = dto.dashboardExperience;
+    if (dto.workspaceVisibilityMode !== undefined) updateData.workspaceVisibilityMode = dto.workspaceVisibilityMode;
 
     await this.prisma.$transaction(async (tx) => {
       if (dto.roleIds !== undefined) {

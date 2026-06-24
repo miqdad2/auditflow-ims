@@ -152,10 +152,11 @@ describe('Unit 65.1 — Executive Dashboard controller access', () => {
   });
 
   // ── Test 12: service receives correct args when allowed ────────────────────
-  it('Test 12 — service is called with actorId, roles, and deptId when executive', async () => {
+  it('Test 12 — service is called with actorId, roles, deptId, and visibilityMode when executive', async () => {
     const user = makeUser({ id: 'u-123', roles: ['STAFF'], dashboardExperience: 'EXECUTIVE', departmentId: 'dept-1' });
     await controller.getExecutiveSummary(user as never);
-    expect(svc.getExecutiveSummary).toHaveBeenCalledWith('u-123', ['STAFF'], 'dept-1');
+    // visibilityMode defaults to 'SELECTED' when not set on user
+    expect(svc.getExecutiveSummary).toHaveBeenCalledWith('u-123', ['STAFF'], 'dept-1', 'SELECTED');
   });
 
   // ── Test 13: service is NOT called when denied ─────────────────────────────

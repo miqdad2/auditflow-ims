@@ -24,7 +24,8 @@ interface UserWorkspaceMembership {
   workspace: { id: string; name: string; status: string; visibility: string; };
 }
 interface WorkspaceOption { id: string; name: string; status: string; }
-type DashboardExperience = 'STANDARD' | 'EXECUTIVE';
+type DashboardExperience     = 'STANDARD' | 'EXECUTIVE';
+type WorkspaceVisibilityMode = 'SELECTED' | 'ALL';
 
 interface UserRow {
   id: string;
@@ -37,6 +38,7 @@ interface UserRow {
   lastLoginAt: string | null;
   createdAt: string;
   dashboardExperience: DashboardExperience;
+  workspaceVisibilityMode: WorkspaceVisibilityMode;
   department: { id: string; name: string; code: string } | null;
   userRoles: Array<{ role: Role }>;
 }
@@ -117,6 +119,7 @@ const BLANK_CREATE = {
   systemAccess: 'NORMAL_USER',
   temporaryPassword: '',
   dashboardExperience: 'STANDARD' as DashboardExperience,
+  workspaceVisibilityMode: 'SELECTED' as WorkspaceVisibilityMode,
 };
 
 const BLANK_EDIT = {
@@ -125,6 +128,7 @@ const BLANK_EDIT = {
   departmentId: '',
   systemAccess: 'NORMAL_USER',
   dashboardExperience: 'STANDARD' as DashboardExperience,
+  workspaceVisibilityMode: 'SELECTED' as WorkspaceVisibilityMode,
 };
 
 // ─── Page ────────────────────────────────────────────────────────────────────
@@ -283,7 +287,8 @@ export default function UsersPage() {
         roleIds:             targetRole ? [targetRole.id] : [],
         temporaryPassword:   createForm.temporaryPassword,
         isActive:            true,
-        dashboardExperience: createForm.dashboardExperience,
+        dashboardExperience:     createForm.dashboardExperience,
+        workspaceVisibilityMode: createForm.workspaceVisibilityMode,
       }, token);
 
       // Add staged workspace memberships
@@ -335,7 +340,8 @@ export default function UsersPage() {
         jobTitle:            editForm.jobTitle.trim() || undefined,
         departmentId:        editForm.departmentId || undefined,
         roleIds:             targetRole ? [targetRole.id] : [],
-        dashboardExperience: editForm.dashboardExperience,
+        dashboardExperience:     editForm.dashboardExperience,
+        workspaceVisibilityMode: editForm.workspaceVisibilityMode,
       }, token);
       setEditUser(null);
       showToast('User updated');
@@ -406,11 +412,12 @@ export default function UsersPage() {
   function openEdit(u: UserRow) {
     setEditUser(u);
     setEditForm({
-      fullName:            u.fullName,
-      jobTitle:            u.jobTitle ?? '',
-      departmentId:        u.department?.id ?? '',
-      systemAccess:        getAccessLevel(u.userRoles),
-      dashboardExperience: u.dashboardExperience ?? 'STANDARD',
+      fullName:               u.fullName,
+      jobTitle:               u.jobTitle ?? '',
+      departmentId:           u.department?.id ?? '',
+      systemAccess:           getAccessLevel(u.userRoles),
+      dashboardExperience:    u.dashboardExperience ?? 'STANDARD',
+      workspaceVisibilityMode: u.workspaceVisibilityMode ?? 'SELECTED',
     });
     setEditError('');
     setActionMenu(null);
@@ -859,13 +866,74 @@ export default function UsersPage() {
                 </div>
               </div>
 
+              {/* Executive Workspace Visibility — shown only when Executive Dashboard is selected */}
+              {createForm.dashboardExperience === 'EXECUTIVE' && (
+                <div className="rounded-lg border p-4"
+                  style={{ borderColor: 'var(--accent-primary)', backgroundColor: 'var(--accent-soft)' }}>
+                  <label className="mb-1 block text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>
+                    Executive Workspace Visibility
+                  </label>
+                  <p className="mb-3 text-xs" style={{ color: 'var(--text-muted)' }}>
+                    Choose which workspaces this executive may view in the Executive Dashboard. This does not affect individual workspace permissions.
+                  </p>
+                  <div className="flex flex-col gap-2">
+                    {([
+                      { value: 'SELECTED' as WorkspaceVisibilityMode, label: 'Selected workspaces only', desc: 'Choose the approved workspaces this executive may view. New workspaces created later must be assigned separately.' },
+                      ...(actorIsSuperAdmin ? [{ value: 'ALL' as WorkspaceVisibilityMode, label: 'All current and future workspaces', desc: 'Company-wide visibility for approved senior leadership. Super Admin grant only.' }] : []),
+                    ]).map(({ value, label, desc }) => {
+                      const sel = createForm.workspaceVisibilityMode === value;
+                      return (
+                        <label key={value}
+                          className="flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors"
+                          style={{
+                            borderColor: sel ? 'var(--accent-primary)' : 'var(--border-default)',
+                            backgroundColor: sel ? 'var(--bg-surface)' : 'var(--bg-muted)',
+                          }}>
+                          <input type="radio" name="createVisibilityMode" value={value} checked={sel}
+                            onChange={() => setCreateForm((p) => ({ ...p, workspaceVisibilityMode: value }))}
+                            className="mt-0.5 accent-blue-600" />
+                          <div>
+                            <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{label}</span>
+                            <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>{desc}</p>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  {/* Select All Current Workspaces — only for SELECTED mode */}
+                  {createForm.workspaceVisibilityMode === 'SELECTED' && (
+                    <div className="mt-3">
+                      <button type="button"
+                        onClick={() => {
+                          void loadWorkspaces().then(() => {
+                            wsKeyRef.current += 1;
+                            const newRows = allWorkspaces
+                              .filter((w) => !stagedWs.some((s) => s.wsId === w.id))
+                              .map((w) => ({ key: String(wsKeyRef.current++), wsId: w.id, wsName: w.name, wsRole: 'VIEWER' }));
+                            setStagedWs((prev) => [...prev, ...newRows]);
+                          });
+                        }}
+                        className="text-xs font-medium underline"
+                        style={{ color: 'var(--accent-primary)' }}>
+                        Select all current workspaces
+                      </button>
+                      <p className="mt-0.5 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                        Assigns all {allWorkspaces.length > 0 ? allWorkspaces.length : 'active'} workspaces with Viewer access. You may remove individual workspaces below.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Workspace Access */}
               <div>
                 <div className="mb-1 flex items-center justify-between">
                   <div>
                     <label className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Workspace Access</label>
                     <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                      Workspace Access controls which workspaces this user can open.
+                      {createForm.dashboardExperience === 'EXECUTIVE' && createForm.workspaceVisibilityMode === 'SELECTED'
+                        ? 'Assign the specific workspaces this executive may view.'
+                        : 'Workspace Access controls which workspaces this user can open.'}
                       {createForm.systemAccess !== 'NORMAL_USER' && (
                         <span> Super User and Super Admin can access all workspaces automatically.</span>
                       )}
@@ -1097,6 +1165,43 @@ export default function UsersPage() {
                   })}
                 </div>
               </div>
+
+              {/* Executive Workspace Visibility — shown only when Executive Dashboard is selected */}
+              {editForm.dashboardExperience === 'EXECUTIVE' && (
+                <div className="rounded-lg border p-4"
+                  style={{ borderColor: 'var(--accent-primary)', backgroundColor: 'var(--accent-soft)' }}>
+                  <label className="mb-1 block text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>
+                    Executive Workspace Visibility
+                  </label>
+                  <p className="mb-3 text-xs" style={{ color: 'var(--text-muted)' }}>
+                    Choose which workspaces this executive may view in the Executive Dashboard.
+                  </p>
+                  <div className="flex flex-col gap-2">
+                    {([
+                      { value: 'SELECTED' as WorkspaceVisibilityMode, label: 'Selected workspaces only', desc: 'Explicit workspace assignments below. New workspaces created later must be assigned separately.' },
+                      ...(actorIsSuperAdmin ? [{ value: 'ALL' as WorkspaceVisibilityMode, label: 'All current and future workspaces', desc: 'Company-wide visibility. Super Admin grant only.' }] : []),
+                    ]).map(({ value, label, desc }) => {
+                      const sel = editForm.workspaceVisibilityMode === value;
+                      return (
+                        <label key={value}
+                          className="flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors"
+                          style={{
+                            borderColor: sel ? 'var(--accent-primary)' : 'var(--border-default)',
+                            backgroundColor: sel ? 'var(--bg-surface)' : 'var(--bg-muted)',
+                          }}>
+                          <input type="radio" name="editVisibilityMode" value={value} checked={sel}
+                            onChange={() => setEditForm((p) => ({ ...p, workspaceVisibilityMode: value }))}
+                            className="mt-0.5 accent-blue-600" />
+                          <div>
+                            <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{label}</span>
+                            <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>{desc}</p>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {editError && <p className="text-sm" style={{ color: 'var(--state-error)' }}>{editError}</p>}
 

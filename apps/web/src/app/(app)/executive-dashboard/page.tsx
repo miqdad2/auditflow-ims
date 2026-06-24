@@ -17,14 +17,14 @@ import { useRouter } from 'next/navigation';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface ExecutiveSummary {
-  complianceHealth: number;
+  complianceHealth: number | null;  // null = N/A (no measurable data)
   activeWorkspaces: number;
   criticalIssues: number;
   overdueActions: number;
   pendingDecisionsCount: number;
   expiringFiles: number;
   tasksAwaitingReview: number;
-  completionRate: number;
+  completionRate: number | null;    // null = N/A (no tasks)
 }
 
 interface AttentionItem {
@@ -67,15 +67,15 @@ interface Trends {
   completedThisWeek: number;
   completedLastWeek: number;
   weeklyTrend: number | null;
-  evidenceReadiness: number;
-  docApprovalRate: number;
-  ncrResolutionRate: number;
+  evidenceReadiness: number | null;   // null = N/A
+  docApprovalRate: number | null;     // null = N/A
+  ncrResolutionRate: number | null;   // null = N/A
 }
 
 interface DeptPerformance {
   departmentId: string;
   departmentName: string;
-  completionRate: number;
+  completionRate: number | null;  // null = N/A
   overdueCount: number;
   issueCount: number;
 }
@@ -147,17 +147,31 @@ const EXEC_EVENTS = [
   'notification.created',
 ] as const;
 
+// ─── helpers ─────────────────────────────────────────────────────────────────
+function fmtMetric(v: number | null, suffix = ''): string {
+  return v === null ? 'N/A' : `${v}${suffix}`;
+}
+
+function metricColor(v: number | null, good = 80, warn = 60): string {
+  if (v === null) return 'var(--text-muted)';
+  if (v >= good)  return 'var(--state-success)';
+  if (v >= warn)  return '#d97706';
+  return 'var(--state-error)';
+}
+
 // ─── KPI Card ─────────────────────────────────────────────────────────────────
 function KpiCard({
   label, value, subtext, color, icon: Icon, trend,
 }: {
   label: string;
-  value: string | number;
+  value: string | number | null;
   subtext?: string;
   color?: string;
   icon: React.ElementType;
   trend?: number | null;
 }) {
+  const displayValue = value === null ? 'N/A' : value;
+  const displayColor = value === null ? 'var(--text-disabled)' : (color ?? 'var(--text-primary)');
   return (
     <div
       className="rounded-xl border p-4 flex flex-col gap-3"
@@ -165,13 +179,15 @@ function KpiCard({
     >
       <div className="flex items-center justify-between">
         <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>{label}</span>
-        <Icon className="h-4 w-4" style={{ color: color ?? 'var(--text-muted)' }} />
+        <Icon className="h-4 w-4" style={{ color: displayColor }} />
       </div>
       <div>
-        <div className="text-2xl font-bold" style={{ color: color ?? 'var(--text-primary)' }}>
-          {value}
+        <div className="text-2xl font-bold" style={{ color: displayColor }}>
+          {displayValue}
         </div>
-        {(subtext || trend !== null && trend !== undefined) && (
+        {value === null ? (
+          <p className="mt-1 text-[10px]" style={{ color: 'var(--text-disabled)' }}>No measurable data</p>
+        ) : (subtext || (trend !== null && trend !== undefined)) ? (
           <div className="mt-1 flex items-center gap-2">
             {subtext && <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{subtext}</span>}
             {trend !== null && trend !== undefined && (
@@ -182,7 +198,7 @@ function KpiCard({
               </span>
             )}
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   );
@@ -287,29 +303,14 @@ export default function ExecutiveDashboardPage() {
 
   const { summary, attentionItems, organizationHealth, pendingDecisions, trends, departmentPerformance, significantActivity } = data;
 
-  // ─── Zero-workspace empty state ───────────────────────────────────────────
-  // A user with Executive dashboard but no workspace memberships sees a safe empty state.
-  // Summary counts will all be 0, so show a clear message instead of misleading zeros.
+  // ─── Zero-workspace state ─────────────────────────────────────────────────
+  // When no accessible workspaces: render only the premium empty state.
+  // Do NOT render KPI cards or sections — they would show misleading zeros.
   const hasNoWorkspaceAccess = summary.activeWorkspaces === 0 && organizationHealth.length === 0;
+  const canManageUsers = user?.permissions?.includes('users.manage') ?? false;
 
   return (
     <div className="flex flex-col gap-6 pb-12">
-
-      {/* ── Zero-workspace notice ────────────────────────────────────────────── */}
-      {hasNoWorkspaceAccess && (
-        <div className="rounded-xl border px-5 py-4 flex items-start gap-3"
-          style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
-          <AlertCircle className="h-5 w-5 mt-0.5 shrink-0" style={{ color: 'var(--text-muted)' }} />
-          <div>
-            <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-              No executive data is available for your current workspace access.
-            </p>
-            <p className="mt-0.5 text-sm" style={{ color: 'var(--text-muted)' }}>
-              Contact an administrator if additional workspace visibility is required.
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* ── Header ──────────────────────────────────────────────────────────── */}
       <div className="flex items-start justify-between gap-4">
@@ -317,9 +318,11 @@ export default function ExecutiveDashboardPage() {
           <h1 className="text-xl font-semibold" style={{ color: 'var(--text-primary)' }}>
             Executive Operations &amp; Compliance Overview
           </h1>
-          <p className="mt-0.5 text-sm" style={{ color: 'var(--text-muted)' }}>
-            Real-time visibility into organizational performance, compliance risks, pending decisions, and operational priorities.
-          </p>
+          {!hasNoWorkspaceAccess && (
+            <p className="mt-0.5 text-sm" style={{ color: 'var(--text-muted)' }}>
+              Real-time visibility into organizational performance, compliance risks, pending decisions, and operational priorities.
+            </p>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-3">
           <div className="flex items-center gap-1.5 text-xs" style={{ color: connected ? 'var(--state-success)' : 'var(--state-error)' }}>
@@ -341,14 +344,47 @@ export default function ExecutiveDashboardPage() {
         </div>
       </div>
 
-      {/* ── KPI Cards ───────────────────────────────────────────────────────── */}
+      {/* ── No-workspace premium empty state ────────────────────────────────── */}
+      {hasNoWorkspaceAccess && (
+        <div className="rounded-xl border p-10 flex flex-col items-center gap-4 text-center"
+          style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
+          <div className="flex h-14 w-14 items-center justify-center rounded-full"
+            style={{ backgroundColor: 'var(--bg-muted)' }}>
+            <Building2 className="h-7 w-7" style={{ color: 'var(--text-muted)' }} />
+          </div>
+          <div>
+            <p className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
+              No management workspaces assigned
+            </p>
+            <p className="mt-1.5 text-sm max-w-md" style={{ color: 'var(--text-muted)' }}>
+              This executive account does not currently have access to any operational workspaces.
+              Assign approved workspaces to display organizational performance, compliance risks,
+              pending decisions, and key priorities.
+            </p>
+          </div>
+          {canManageUsers ? (
+            <Link href="/users"
+              className="mt-2 rounded-lg px-4 py-2 text-sm font-medium text-white"
+              style={{ backgroundColor: 'var(--accent-primary)' }}>
+              Manage Users &amp; Workspace Access
+            </Link>
+          ) : (
+            <p className="text-sm" style={{ color: 'var(--text-disabled)' }}>
+              Contact the system administrator to request workspace visibility.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* ── KPI Cards (hidden when no workspace access) ─────────────────────── */}
+      {!hasNoWorkspaceAccess && (
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <KpiCard
           label="Compliance Health"
-          value={`${summary.complianceHealth}%`}
+          value={summary.complianceHealth !== null ? `${summary.complianceHealth}%` : null}
           icon={Shield}
-          color={summary.complianceHealth >= 80 ? 'var(--state-success)' : summary.complianceHealth >= 60 ? '#d97706' : 'var(--state-error)'}
-          subtext="Evidence + Docs + NCR"
+          color={metricColor(summary.complianceHealth)}
+          subtext={summary.complianceHealth !== null ? 'Evidence + Docs + NCR' : undefined}
         />
         <KpiCard
           label="Active Workspaces"
@@ -393,15 +429,16 @@ export default function ExecutiveDashboardPage() {
         />
         <KpiCard
           label="Completion Rate"
-          value={`${summary.completionRate}%`}
+          value={summary.completionRate !== null ? `${summary.completionRate}%` : null}
           icon={TrendingUp}
-          color={summary.completionRate >= 70 ? 'var(--state-success)' : '#d97706'}
+          color={summary.completionRate !== null ? metricColor(summary.completionRate, 70, 40) : undefined}
           trend={trends.weeklyTrend}
         />
       </div>
+      )}
 
-      {/* ── Two-column: Attention + Decisions ───────────────────────────────── */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      {/* ── Attention + Decisions (hidden when no workspace access) ────────── */}
+      {!hasNoWorkspaceAccess && <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
 
         {/* Requires Executive Attention */}
         <div className="rounded-xl border" style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
@@ -495,14 +532,14 @@ export default function ExecutiveDashboardPage() {
             )}
           </div>
         </div>
-      </div>
+      </div>}
 
       {/* ── Organization Health ─────────────────────────────────────────────── */}
-      <div className="rounded-xl border" style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
+      {!hasNoWorkspaceAccess && <div className="rounded-xl border" style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
         <div className="px-5 py-4" style={{ borderBottom: '1px solid var(--border-default)' }}>
           <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Organization Health</h2>
           <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-            Health = Critical if critNcr &gt; 5 or overdue &gt; 10 | At Risk if critNcr &gt; 2 or overdue &gt; 5 | Attention if any overdue/issues | otherwise On Track (≥60% completion)
+            Health status is calculated from overdue actions, critical issues, completion progress, and compliance exposure.
           </p>
         </div>
         {organizationHealth.length === 0 ? (
@@ -554,10 +591,10 @@ export default function ExecutiveDashboardPage() {
             </table>
           </div>
         )}
-      </div>
+      </div>}
 
       {/* ── Trends + Department Performance ─────────────────────────────────── */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      {!hasNoWorkspaceAccess && <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
 
         {/* Compliance & Risk Summary */}
         <div className="rounded-xl border p-5" style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
@@ -568,7 +605,7 @@ export default function ExecutiveDashboardPage() {
               { label: 'Document Approval Rate', value: trends.docApprovalRate, desc: 'Approved docs / total docs' },
               { label: 'NCR Resolution Rate', value: trends.ncrResolutionRate, desc: 'Verified + Closed / total NCR' },
             ].map(({ label, value, desc }) => {
-              const color = value >= 80 ? 'var(--state-success)' : value >= 60 ? '#d97706' : 'var(--state-error)';
+              const color = value === null ? 'var(--text-disabled)' : value >= 80 ? 'var(--state-success)' : value >= 60 ? '#d97706' : 'var(--state-error)';
               return (
                 <div key={label}>
                   <div className="mb-1 flex items-center justify-between">
@@ -576,12 +613,16 @@ export default function ExecutiveDashboardPage() {
                       <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{label}</span>
                       <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{desc}</p>
                     </div>
-                    <span className="text-sm font-bold" style={{ color }}>{value}%</span>
+                    <span className="text-sm font-bold" style={{ color }}>{fmtMetric(value, '%')}</span>
                   </div>
-                  <div className="h-2 w-full overflow-hidden rounded-full" style={{ backgroundColor: 'var(--bg-muted)' }}>
-                    <div className="h-full rounded-full transition-all duration-500"
-                      style={{ width: `${value}%`, backgroundColor: color }} />
-                  </div>
+                  {value !== null ? (
+                    <div className="h-2 w-full overflow-hidden rounded-full" style={{ backgroundColor: 'var(--bg-muted)' }}>
+                      <div className="h-full rounded-full transition-all duration-500"
+                        style={{ width: `${value}%`, backgroundColor: color }} />
+                    </div>
+                  ) : (
+                    <p className="text-[10px]" style={{ color: 'var(--text-disabled)' }}>No measurable data available.</p>
+                  )}
                 </div>
               );
             })}
@@ -616,19 +657,23 @@ export default function ExecutiveDashboardPage() {
           ) : (
             <div className="divide-y">
               {departmentPerformance.map((d) => {
-                const color = d.completionRate >= 80 ? 'var(--state-success)' : d.completionRate >= 60 ? '#d97706' : 'var(--state-error)';
+                const color = metricColor(d.completionRate, 80, 60);
                 return (
                   <div key={d.departmentId} className="px-5 py-3">
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between">
                           <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{d.departmentName}</span>
-                          <span className="text-sm font-bold" style={{ color }}>{d.completionRate}%</span>
+                          <span className="text-sm font-bold" style={{ color }}>{fmtMetric(d.completionRate, '%')}</span>
                         </div>
-                        <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full" style={{ backgroundColor: 'var(--bg-muted)' }}>
-                          <div className="h-full rounded-full"
-                            style={{ width: `${d.completionRate}%`, backgroundColor: color }} />
-                        </div>
+                        {d.completionRate !== null ? (
+                          <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full" style={{ backgroundColor: 'var(--bg-muted)' }}>
+                            <div className="h-full rounded-full"
+                              style={{ width: `${d.completionRate}%`, backgroundColor: color }} />
+                          </div>
+                        ) : (
+                          <p className="text-[10px]" style={{ color: 'var(--text-disabled)' }}>No measurable data</p>
+                        )}
                         <div className="mt-1 flex gap-3 text-xs" style={{ color: 'var(--text-muted)' }}>
                           <span>{d.overdueCount} overdue</span>
                           <span>{d.issueCount} issues</span>
@@ -641,10 +686,10 @@ export default function ExecutiveDashboardPage() {
             </div>
           )}
         </div>
-      </div>
+      </div>}
 
       {/* ── Recent Significant Activity ──────────────────────────────────────── */}
-      <div className="rounded-xl border" style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
+      {!hasNoWorkspaceAccess && <div className="rounded-xl border" style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
         <div className="px-5 py-4" style={{ borderBottom: '1px solid var(--border-default)' }}>
           <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Recent Significant Activity</h2>
           <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -678,7 +723,7 @@ export default function ExecutiveDashboardPage() {
             ))}
           </div>
         )}
-      </div>
+      </div>}
 
     </div>
   );

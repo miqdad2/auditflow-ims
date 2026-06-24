@@ -7,6 +7,11 @@ export enum DashboardExperienceDto {
   EXECUTIVE = 'EXECUTIVE',
 }
 
+export enum WorkspaceVisibilityModeDto {
+  SELECTED = 'SELECTED',
+  ALL      = 'ALL',
+}
+
 export class CreateUserDto {
   @IsEmail()
   email: string;
@@ -43,4 +48,8 @@ export class CreateUserDto {
   @IsEnum(DashboardExperienceDto)
   @IsOptional()
   dashboardExperience?: DashboardExperienceDto;
+
+  @IsEnum(WorkspaceVisibilityModeDto)
+  @IsOptional()
+  workspaceVisibilityMode?: WorkspaceVisibilityModeDto;
 }

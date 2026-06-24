@@ -800,18 +800,24 @@ export class DashboardService {
   // Elevated users see all active workspaces; non-elevated users see only their memberships.
   // ─────────────────────────────────────────────────────────────────────────────
 
-  async getExecutiveSummary(actorId: string, actorRoles: string[], actorDeptId: string | null) {
+  async getExecutiveSummary(
+    actorId: string,
+    actorRoles: string[],
+    actorDeptId: string | null,
+    visibilityMode = 'SELECTED',
+  ) {
     const tier = getAccessTier(actorRoles);
     const now  = new Date();
     const in30  = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
     const eod  = endOfDayKuwait(now);
 
-    // ─── Step 1: resolve accessible workspace IDs for non-elevated users ─────
-    // Elevated users: wsIdFilter = undefined → queries run globally (no ws restriction).
-    // Non-elevated users: wsIdFilter = { in: [...] } → all queries restricted to memberships.
+    // ─── Step 1: resolve accessible workspace scope ───────────────────────────
+    // Elevated users: always global (no ws restriction).
+    // Non-elevated + visibilityMode=ALL: global scope (Super Admin grant).
+    // Non-elevated + visibilityMode=SELECTED: restricted to explicit memberships.
     let wsIdFilter: { in: string[] } | undefined;
 
-    if (tier !== 'ELEVATED') {
+    if (tier !== 'ELEVATED' && visibilityMode !== 'ALL') {
       const memberRows = await this.prisma.workspaceMember.findMany({
         where: { userId: actorId },
         select: { workspaceId: true },
@@ -953,7 +959,7 @@ export class DashboardService {
       }),
     ]);
 
-    // ─── KPI aggregation ──────────────────────────────────────────────────────
+    // ─── KPI aggregation — null = "N/A" (no measurable data) ─────────────────
     const taskMap = Object.fromEntries(taskCounts.map((g) => [g.status, g._count.id]));
     const docMap  = Object.fromEntries(docCounts.map((g)  => [g.status, g._count.id]));
     const ncrMap  = Object.fromEntries(ncrCounts.map((g)  => [g.status, g._count.id]));
@@ -961,23 +967,43 @@ export class DashboardService {
 
     const totalTasks     = Object.values(taskMap).reduce((s, v) => s + v, 0);
     const completedTasks = taskMap['COMPLETED'] ?? 0;
-    const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+    // null = no tasks at all (don't show 0% or 100% when denominator is zero)
+    const completionRate: number | null = totalTasks > 0
+      ? Math.round((completedTasks / totalTasks) * 100)
+      : null;
 
     const ciTotal    = Object.values(ciMap).reduce((s, v) => s + v, 0);
     const ciApproved = ciMap['APPROVED'] ?? 0;
-    const evidenceReadiness = ciTotal > 0 ? Math.round((ciApproved / ciTotal) * 100) : 0;
+    const evidenceReadiness: number | null = ciTotal > 0
+      ? Math.round((ciApproved / ciTotal) * 100)
+      : null;
 
     const docTotal       = Object.values(docMap).reduce((s, v) => s + v, 0);
     const docApproved    = docMap['APPROVED'] ?? 0;
-    const docApprovalRate = docTotal > 0 ? Math.round((docApproved / docTotal) * 100) : 0;
+    const docApprovalRate: number | null = docTotal > 0
+      ? Math.round((docApproved / docTotal) * 100)
+      : null;
 
     const ncrTotal  = Object.values(ncrMap).reduce((s, v) => s + v, 0);
     const ncrClosed = (ncrMap['VERIFIED'] ?? 0) + (ncrMap['CLOSED'] ?? 0);
-    const ncrResolutionRate = ncrTotal > 0 ? Math.round((ncrClosed / ncrTotal) * 100) : 100;
+    // null = no NCRs (do NOT default to 100% — that was the source of the 25% bug)
+    const ncrResolutionRate: number | null = ncrTotal > 0
+      ? Math.round((ncrClosed / ncrTotal) * 100)
+      : null;
 
-    const complianceHealth = Math.round(
-      evidenceReadiness * 0.40 + docApprovalRate * 0.35 + ncrResolutionRate * 0.25,
-    );
+    // Compliance health: null when ALL three components lack measurable data.
+    // Formula: evidenceReadiness(40%) + docApprovalRate(35%) + ncrResolutionRate(25%)
+    // Only measured components are included; if any are null, their weight is redistributed.
+    const hasAnyComplianceData = evidenceReadiness !== null || docApprovalRate !== null || ncrResolutionRate !== null;
+    let complianceHealth: number | null = null;
+    if (hasAnyComplianceData) {
+      let weightedSum = 0;
+      let totalWeight = 0;
+      if (evidenceReadiness !== null) { weightedSum += evidenceReadiness * 0.40; totalWeight += 0.40; }
+      if (docApprovalRate   !== null) { weightedSum += docApprovalRate   * 0.35; totalWeight += 0.35; }
+      if (ncrResolutionRate !== null) { weightedSum += ncrResolutionRate * 0.25; totalWeight += 0.25; }
+      complianceHealth = totalWeight > 0 ? Math.round(weightedSum / totalWeight) : null;
+    }
 
     const criticalIssues         = (ncrMap['OPEN'] ?? 0) + (ncrMap['OVERDUE'] ?? 0);
     const overdueActions         = overdueTaskCount + (ncrMap['OVERDUE'] ?? 0);
@@ -1137,10 +1163,11 @@ export class DashboardService {
     const departmentPerformance = [...deptPerfMap.values()].map((d) => ({
       departmentId:   d.deptId,
       departmentName: d.deptName,
-      completionRate: d.taskTotal > 0 ? Math.round((d.taskCompleted / d.taskTotal) * 100) : 0,
+      // null = no measurable tasks for this department (N/A, not 0%)
+      completionRate: d.taskTotal > 0 ? Math.round((d.taskCompleted / d.taskTotal) * 100) : null as number | null,
       overdueCount:   d.taskOverdue,
       issueCount:     d.issueCount,
-    })).sort((a, b) => b.completionRate - a.completionRate);
+    })).sort((a, b) => (b.completionRate ?? -1) - (a.completionRate ?? -1));
 
     // ─── Significant activity ─────────────────────────────────────────────────
     const significantActivity = recentSignificantActivity.map((log) => ({

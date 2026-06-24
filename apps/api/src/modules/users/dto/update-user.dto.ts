@@ -1,5 +1,5 @@
 import { IsString, IsOptional, IsArray, IsEnum, MaxLength } from 'class-validator';
-import { DashboardExperienceDto } from './create-user.dto';
+import { DashboardExperienceDto, WorkspaceVisibilityModeDto } from './create-user.dto';
 
 export class UpdateUserDto {
   @IsString()
@@ -23,4 +23,8 @@ export class UpdateUserDto {
   @IsEnum(DashboardExperienceDto)
   @IsOptional()
   dashboardExperience?: DashboardExperienceDto;
+
+  @IsEnum(WorkspaceVisibilityModeDto)
+  @IsOptional()
+  workspaceVisibilityMode?: WorkspaceVisibilityModeDto;
 }

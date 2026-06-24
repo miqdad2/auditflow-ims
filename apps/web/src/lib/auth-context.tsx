@@ -2,7 +2,8 @@
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
 
-export type DashboardExperience = 'STANDARD' | 'EXECUTIVE';
+export type DashboardExperience     = 'STANDARD' | 'EXECUTIVE';
+export type WorkspaceVisibilityMode = 'SELECTED' | 'ALL';
 
 export interface AuthUser {
   id: string;
@@ -16,6 +17,7 @@ export interface AuthUser {
   permissions: string[];
   mustChangePassword: boolean;
   dashboardExperience: DashboardExperience;
+  workspaceVisibilityMode: WorkspaceVisibilityMode;
 }
 
 interface AuthContextValue {

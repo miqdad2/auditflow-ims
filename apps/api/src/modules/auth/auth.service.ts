@@ -116,6 +116,7 @@ export class AuthService {
         permissions,
         mustChangePassword: user.mustChangePassword,
         dashboardExperience: user.dashboardExperience ?? 'STANDARD',
+        workspaceVisibilityMode: user.workspaceVisibilityMode ?? 'SELECTED',
       },
     };
   }
@@ -189,6 +190,7 @@ export class AuthService {
       mustChangePassword: user.mustChangePassword,
       lastLoginAt: user.lastLoginAt,
       dashboardExperience: (user.dashboardExperience as string) ?? 'STANDARD',
+      workspaceVisibilityMode: (user.workspaceVisibilityMode as string) ?? 'SELECTED',
     };
   }
 }

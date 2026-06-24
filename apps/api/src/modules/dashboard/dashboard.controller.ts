@@ -48,6 +48,7 @@ export class DashboardController {
     if (dashboardExp !== 'EXECUTIVE') {
       throw new ForbiddenException('Executive Dashboard is not enabled for this account.');
     }
-    return this.svc.getExecutiveSummary(user.id as string, roles, deptId);
+    const visibilityMode = (user.workspaceVisibilityMode as string | undefined) ?? 'SELECTED';
+    return this.svc.getExecutiveSummary(user.id as string, roles, deptId, visibilityMode);
   }
 }
