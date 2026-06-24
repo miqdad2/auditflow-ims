@@ -44,6 +44,9 @@ export function useRealtimeInvalidation({
   const timerRef         = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevConnectedRef = useRef(false);
 
+  // Strict eventId deduplication: Map<eventId, timestampMs> with 60s TTL
+  const seenEventIds = useRef(new Map<string, number>());
+
   // Stable string key so the event-subscription effect only re-runs when the
   // events list actually changes (not on every render from an inline array literal)
   const eventsKey = [...events].join(',');
@@ -52,6 +55,20 @@ export function useRealtimeInvalidation({
     if (!socket || !enabled) return;
 
     function schedule(payload?: Record<string, unknown>) {
+      // Strict eventId deduplication — prevents duplicate refetch for same event
+      const eventId = payload?.eventId as string | undefined;
+      if (eventId) {
+        const now = Date.now();
+        const TTL = 60_000; // 60 seconds
+        // Lazily clean expired entries to prevent unbounded growth
+        for (const [id, ts] of seenEventIds.current) {
+          if (now - ts > TTL) seenEventIds.current.delete(id);
+        }
+        if (seenEventIds.current.has(eventId)) return; // duplicate — ignore
+        seenEventIds.current.set(eventId, now);
+      }
+      // eventId missing (legacy/old event) → process via debounce only
+
       // Optional per-workspace filtering
       if (workspaceId && payload?.workspaceId && payload.workspaceId !== workspaceId) return;
 

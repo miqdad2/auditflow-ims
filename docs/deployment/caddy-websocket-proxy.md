@@ -1,4 +1,4 @@
-# Caddy WebSocket Proxy — Socket.IO Configuration
+# Caddy WebSocket Proxy — Socket.IO Configuration and Production Connection Model
 
 ## Required for AuditFlow IMS Realtime
 
@@ -106,22 +106,98 @@ A 200 response with JSON like `{"sid":"...","upgrades":["websocket"],...}` confi
 
 ---
 
-## Current Production Deployment
+## Production Connection Model (Single-Origin — Recommended)
 
-The current company-server deployment uses:
+All browser traffic uses ONE origin (port 80/443). No direct browser access to port 4000.
 
 ```
-/api/* → 127.0.0.1:4000   (REST API)
-other  → 127.0.0.1:3000   (Next.js frontend)
+Browser → http://server/             → Caddy → Next.js :3000  (frontend)
+Browser → http://server/api/*        → Caddy → NestJS  :4000  (REST API)
+Browser → http://server/socket.io/*  → Caddy → NestJS  :4000  (WebSocket)
 ```
 
-The `/socket.io/*` route is NOT explicitly listed in the current Caddyfile.
+### Required environment variables for production build
 
-**Action required before production deployment:** Add the Socket.IO route to the Caddyfile and reload Caddy:
+Set BEFORE running `pnpm --filter web build`:
 
-```bash
-sudo caddy reload --config /etc/caddy/Caddyfile
 ```
+NEXT_PUBLIC_API_URL=/api
+NEXT_PUBLIC_SOCKET_URL=
+```
+
+An empty `NEXT_PUBLIC_SOCKET_URL` means the socket client uses `window.location.origin`
+(the browser's current origin), which routes through Caddy's `/socket.io/*` rule.
+
+### Required Caddy configuration
+
+```caddy
+:80 {
+    # Socket.IO WebSocket — MUST be before /api/* (more specific route)
+    handle /socket.io/* {
+        reverse_proxy 127.0.0.1:4000 {
+            header_up Connection {>Connection}
+            header_up Upgrade {>Upgrade}
+        }
+    }
+
+    # REST API — Caddy strips /api before forwarding (NestJS has no global prefix)
+    handle_path /api/* {
+        reverse_proxy 127.0.0.1:4000
+    }
+
+    # Frontend — all other routes
+    handle {
+        reverse_proxy 127.0.0.1:3000
+    }
+}
+```
+
+### Required NestJS CORS
+
+Set in `apps/api/.env`:
+```
+CORS_ORIGIN=http://server   (or https://server when TLS is enabled)
+```
+
+### Firewall
+
+With single-origin model, port 4000 can remain private (accessible only from localhost/Caddy).
+Port 80 (or 443 with TLS) is the only port browsers need.
+
+```
+Firewall: open port 80 (or 443)
+Firewall: keep port 4000 private (localhost only)
+Firewall: keep port 3000 private (localhost only)
+```
+
+### Legacy direct-port model
+
+The previous model had browsers connecting directly to port 4000:
+```
+NEXT_PUBLIC_API_URL=http://192.168.1.69:4000
+NEXT_PUBLIC_SOCKET_URL=http://192.168.1.69:4000
+```
+
+This still works but requires port 4000 to be open to the network and bypasses Caddy for
+API and WebSocket traffic. **The single-origin model is preferred for production.**
+
+## Current Deployment Status
+
+The current company-server deployment MAY still use the legacy direct-port model.
+
+**Action required before production deployment:**
+
+1. Add the Socket.IO route to the Caddyfile (see above)
+2. Set production environment variables before rebuilding:
+   ```
+   NEXT_PUBLIC_API_URL=/api
+   NEXT_PUBLIC_SOCKET_URL=
+   CORS_ORIGIN=http://server
+   ```
+3. Rebuild: `pnpm --filter web build`
+4. Reload Caddy: `caddy reload --config /etc/caddy/Caddyfile` (or system service restart)
+5. Verify: `curl http://server/socket.io/?EIO=4&transport=polling` → 200 with JSON
+6. Verify: `curl http://server/api/auth/me` with JWT → 401 (not 404)
 
 ---
 

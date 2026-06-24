@@ -8,8 +8,8 @@ import {
 } from 'lucide-react';
 import { apiGet, apiPostAuth, apiPatchAuth } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import { useSocket } from '@/lib/socket-provider';
 import { useToast } from '@/lib/toast-provider';
+import { useRealtimeInvalidation } from '@/lib/use-realtime-invalidation';
 
 interface DepartmentCount {
   users: number;
@@ -56,9 +56,10 @@ const SORT_OPTIONS: { value: SortKey; label: string }[] = [
 const inputCls = 'w-full rounded-lg border px-3 py-1.5 text-sm outline-none';
 const inputSt  = { borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' };
 
+const DEPT_EVENTS = ['department.updated'] as const;
+
 export default function DepartmentsPage() {
   const { token, user } = useAuth();
-  const { socket } = useSocket();
   const { showToast } = useToast();
 
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -104,20 +105,12 @@ export default function DepartmentsPage() {
 
   useEffect(() => { void load(); }, [load]);
 
-  // Realtime: department.updated → debounced silent refresh
-  const deptRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    if (!socket) return;
-    const schedule = () => {
-      if (deptRefreshTimer.current) clearTimeout(deptRefreshTimer.current);
-      deptRefreshTimer.current = setTimeout(() => void load(), 400);
-    };
-    socket.on('department.updated', schedule);
-    return () => {
-      socket.off('department.updated', schedule);
-      if (deptRefreshTimer.current) clearTimeout(deptRefreshTimer.current);
-    };
-  }, [socket, load]);
+  // Realtime: department.updated → shared hook with dedup + debounce
+  useRealtimeInvalidation({
+    events: DEPT_EVENTS,
+    onInvalidate: load,
+    debounceMs: 400,
+  });
 
   useEffect(() => {
     if (!openMenuId) return;

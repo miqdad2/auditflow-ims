@@ -6,7 +6,13 @@ import {
 import { io, Socket } from 'socket.io-client';
 import { useAuth } from './auth-context';
 
+// REST API base URL — development: http://localhost:4000 / production: /api
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+
+// Socket.IO URL — if not set (or empty), defaults to same-origin (production Caddy model).
+// Development: set NEXT_PUBLIC_SOCKET_URL=http://localhost:4000
+// Production (single-origin Caddy): leave NEXT_PUBLIC_SOCKET_URL unset — uses window.location.origin
+const SOCKET_URL_ENV = process.env.NEXT_PUBLIC_SOCKET_URL?.trim() ?? '';
 
 interface SocketContextValue {
   socket: Socket | null;
@@ -48,7 +54,14 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
 
     setIsConnecting(true);
 
-    const socket = io(API_URL, {
+    // In production (NEXT_PUBLIC_SOCKET_URL unset): use same-origin so traffic
+    // goes through Caddy /socket.io/* → port 4000. In dev: use localhost:4000.
+    const socketOrigin =
+      SOCKET_URL_ENV ||
+      (typeof window !== 'undefined' ? window.location.origin : API_URL);
+
+    const socket = io(socketOrigin, {
+      path: '/socket.io',          // explicit — matches Caddy handle /socket.io/*
       auth: { token },
       transports: ['websocket', 'polling'],
       reconnection: true,

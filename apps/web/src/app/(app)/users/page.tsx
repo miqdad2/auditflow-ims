@@ -10,8 +10,8 @@ import {
 import { apiGet, apiPostAuth, apiPatchAuth, apiDeleteAuth } from '@/lib/api';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
-import { useSocket } from '@/lib/socket-provider';
 import { useToast } from '@/lib/toast-provider';
+import { useRealtimeInvalidation } from '@/lib/use-realtime-invalidation';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -121,9 +121,10 @@ const BLANK_EDIT = {
 
 // ─── Page ────────────────────────────────────────────────────────────────────
 
+const USER_EVENTS = ['user.updated'] as const;
+
 export default function UsersPage() {
   const { token, user } = useAuth();
-  const { socket } = useSocket();
   const { showToast } = useToast();
 
   const [users, setUsers]             = useState<UserRow[]>([]);
@@ -234,20 +235,13 @@ export default function UsersPage() {
 
   useEffect(() => { void loadData(); }, [loadData]);
 
-  // Realtime: user.updated → debounced refresh (respects Unit 63.4 server-side scope)
-  const userRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    if (!socket) return;
-    const schedule = () => {
-      if (userRefreshTimer.current) clearTimeout(userRefreshTimer.current);
-      userRefreshTimer.current = setTimeout(() => void loadData(), 400);
-    };
-    socket.on('user.updated', schedule);
-    return () => {
-      socket.off('user.updated', schedule);
-      if (userRefreshTimer.current) clearTimeout(userRefreshTimer.current);
-    };
-  }, [socket, loadData]);
+  // Realtime: user.updated → shared hook with dedup + debounce
+  // Server-side scope (Unit 63.4) applies — Super User receives only business users
+  useRealtimeInvalidation({
+    events: USER_EVENTS,
+    onInvalidate: loadData,
+    debounceMs: 400,
+  });
 
   // Load workspaces for both create + edit pickers
   const loadWorkspaces = useCallback(async () => {
