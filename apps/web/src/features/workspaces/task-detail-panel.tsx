@@ -128,9 +128,9 @@ export function TaskDetailPanel({ taskId, onClose, onUpdated, onDeleted, externa
 
   // ── Permissions ───────────────────────────────────────────────────────────
   const canUpdate  = user?.permissions?.includes('tasks.update')  ?? false;
-  const canDelete  = user?.permissions?.includes('tasks.delete')  ?? false;
   const isElevated = (user?.roles as string[] | undefined)?.some((r) => ELEVATED_ROLES.includes(r)) ?? false;
-  const canDeleteTask = canDelete || isElevated;
+  // Permanent deletion is SUPER_ADMIN only — backend enforces this; frontend mirrors for UX
+  const canDeleteTask = (user?.roles as string[] | undefined)?.includes('SUPER_ADMIN') ?? false;
   // isLocked: non-elevated users cannot edit COMPLETED/CANCELLED task fields (title/description/assignee)
   // Status changes are still possible via the controlled action UI for authorized users.
   const isLocked  = task ? ['COMPLETED', 'CANCELLED'].includes(task.status) && !isElevated : false;

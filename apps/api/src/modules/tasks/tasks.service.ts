@@ -1732,34 +1732,50 @@ export class TasksService {
 
   async deleteTask(id: string, actor: Record<string, unknown>) {
     const actorId = actor.id as string;
+    const actorRoles = extractUserRoles(actor);
+
+    // Permanent deletion is restricted to SUPER_ADMIN only
+    if (!actorRoles.includes('SUPER_ADMIN')) {
+      throw new ForbiddenException('Only Super Admin can permanently delete tasks.');
+    }
+
     const task = await this.prisma.task.findUnique({ where: { id } });
     if (!task) throw new NotFoundException('Task not found');
 
-    const actorRoles = extractUserRoles(actor);
-    const isElevated = actorRoles.some((r) => ELEVATED_ROLES.includes(r));
-
-    if (!isElevated && ['COMPLETED', 'CANCELLED'].includes(task.status)) {
-      throw new ForbiddenException('Cannot delete a completed or cancelled task');
+    // Block deletion of tasks that are part of an active review/completion workflow
+    if (['COMPLETED', 'WAITING_REVIEW'].includes(task.status)) {
+      throw new ForbiddenException('This task has linked business records and cannot be permanently deleted.');
     }
 
-    const perms = extractUserPermissions(actor);
-    if (!isElevated && !perms.includes('tasks.delete')) {
-      throw new ForbiddenException('Insufficient permissions to delete this task');
+    // Block if dependent records exist — subtasks, attachments, or linked records
+    const [subtaskCount, attachmentCount, linkedCount] = await Promise.all([
+      this.prisma.task.count({ where: { parentTaskId: id } }),
+      this.prisma.fileAttachment.count({ where: { entityType: 'TASK', entityId: id } }),
+      this.prisma.linkedRecord.count({
+        where: { OR: [{ sourceType: 'TASK', sourceId: id }, { targetType: 'TASK', targetId: id }] },
+      }),
+    ]);
+
+    if (subtaskCount > 0 || attachmentCount > 0 || linkedCount > 0) {
+      throw new ConflictException('This task has linked business records and cannot be permanently deleted.');
     }
 
+    const snapshot = { title: task.title, status: task.status, workspaceId: task.workspaceId };
     await this.prisma.task.delete({ where: { id } });
 
-    void this.auditLog.log({
+    await this.auditLog.log({
       actorId,
-      action: 'DELETED',
+      action: 'TASK_PERMANENTLY_DELETED',
       entityType: 'TASK',
       entityId: id,
-      previousValue: { title: task.title, status: task.status },
+      previousValue: snapshot,
     });
 
-    this.realtime.emitToWorkspace(task.workspaceId, 'task.deleted', {
-      id, workspaceId: task.workspaceId,
-    });
+    try {
+      this.realtime.emitToWorkspace(task.workspaceId, 'task.deleted', {
+        id, workspaceId: task.workspaceId,
+      });
+    } catch { /* realtime failure does not undo deletion */ }
 
     return { success: true };
   }

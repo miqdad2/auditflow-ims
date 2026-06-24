@@ -98,6 +98,18 @@
 - Users must only access documents, tasks, and evidence allowed by their role/department/project permissions.
 - Auditor/viewer users must not mutate ISO records.
 
+## Permanent Deletion Rules
+
+- **Only SUPER_ADMIN can permanently delete tasks or task lists.** All other roles (SUPER_USER, ISO_MANAGER, QHSE_USER, IT_ADMIN, DEPARTMENT_MANAGER, STAFF) are denied with HTTP 403.
+- The backend must explicitly check `actorRoles.includes('SUPER_ADMIN')` — relying on a broad ELEVATED_ROLES bypass is not sufficient.
+- Before deleting a task, the service must count subtasks, file attachments, and linked records and throw `ConflictException` if any exist.
+- Tasks in COMPLETED or WAITING_REVIEW status cannot be permanently deleted (throw ForbiddenException).
+- Before deleting a task list, the service must count tasks in the list and throw `ConflictException` if any exist.
+- Permanent deletion audit logs must use specific action names: `TASK_PERMANENTLY_DELETED` and `TASK_LIST_PERMANENTLY_DELETED` — not the generic `DELETED`.
+- Realtime emits after permanent deletion must be wrapped in try-catch so a socket failure does not undo the committed deletion.
+- Frontend delete UI for permanent deletion must use a confirmation modal that requires the user to type "DELETE" — not a browser `confirm()` dialog.
+- Frontend `canDeleteTask` and task-list delete menu items must be gated by the SUPER_ADMIN role check, not by `tasks.delete` permission.
+
 ## Notifications
 
 - Notifications must be stored in the database.

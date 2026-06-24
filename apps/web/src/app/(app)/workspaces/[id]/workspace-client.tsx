@@ -238,6 +238,14 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
   const [openListMenuId, setOpenListMenuId] = useState<string | null>(null);
   const listMenuRef = useRef<HTMLDivElement | null>(null);
 
+  // Delete confirmation modals (task + task list) — require typing "DELETE"
+  const [deleteTaskModalId, setDeleteTaskModalId]       = useState<string | null>(null);
+  const [deleteTaskConfirmText, setDeleteTaskConfirmText] = useState('');
+  const [deleteTaskLoading, setDeleteTaskLoading]       = useState(false);
+  const [deleteListModalId, setDeleteListModalId]       = useState<string | null>(null);
+  const [deleteListConfirmText, setDeleteListConfirmText] = useState('');
+  const [deleteListLoading, setDeleteListLoading]       = useState(false);
+
   // Quick Add dropdown
   const [showQuickAdd, setShowQuickAdd] = useState(false);
   const quickAddRef = useRef<HTMLDivElement | null>(null);
@@ -278,9 +286,11 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
   const canCollaborate   = isElevatedAccess || ['OWNER', 'MANAGER', 'MEMBER'].includes(myWsRole ?? '');
   const canManageWs      = isElevatedAccess || ['OWNER', 'MANAGER'].includes(myWsRole ?? '');
 
+  const isSuperAdmin     = (user?.roles as string[] | undefined)?.includes('SUPER_ADMIN') ?? false;
   const canManage        = (user?.permissions?.includes('project.create') ?? false) || canCollaborate;
   const canManageMembers = (user?.permissions?.includes('project.update') ?? false) || canManageWs;
-  const canDeleteTask    = user?.permissions?.includes('tasks.delete') ?? false;
+  // Permanent deletion is SUPER_ADMIN only — backend enforces this; frontend mirrors for UX
+  const canDeleteTask    = isSuperAdmin;
   // Inline assignee control: Super User/Admin or workspace Manager/Owner
   const canAssignTasks   = canManageWs || isElevatedAccess;
 
@@ -654,15 +664,51 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
     } catch { showToast('Failed to duplicate task'); }
   }
 
-  async function handleDeleteTask(taskId: string) {
-    if (!token || !confirm('Delete this task? This cannot be undone.')) return;
+  function handleDeleteTask(taskId: string) {
     setOpenMenuId(null);
+    setDeleteTaskModalId(taskId);
+    setDeleteTaskConfirmText('');
+  }
+
+  async function handleConfirmDeleteTask() {
+    if (!token || !deleteTaskModalId || deleteTaskConfirmText !== 'DELETE') return;
+    setDeleteTaskLoading(true);
     try {
-      await apiDeleteAuth(`/tasks/${taskId}`, token);
-      setTasks((prev) => prev.filter((t) => t.id !== taskId));
-      if (selectedTaskId === taskId) setSelectedTaskId(null);
-      showToast('Task deleted');
-    } catch (err) { showToast(err instanceof Error ? err.message : 'Failed to delete task'); }
+      await apiDeleteAuth(`/tasks/${deleteTaskModalId}`, token);
+      setTasks((prev) => prev.filter((t) => t.id !== deleteTaskModalId));
+      if (selectedTaskId === deleteTaskModalId) setSelectedTaskId(null);
+      showToast('Task permanently deleted');
+      setDeleteTaskModalId(null);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to delete task');
+    } finally {
+      setDeleteTaskLoading(false);
+    }
+  }
+
+  function handleDeleteTaskList(listId: string) {
+    setOpenListMenuId(null);
+    setDeleteListModalId(listId);
+    setDeleteListConfirmText('');
+  }
+
+  async function handleConfirmDeleteTaskList() {
+    if (!token || !deleteListModalId || deleteListConfirmText !== 'DELETE') return;
+    setDeleteListLoading(true);
+    try {
+      await apiDeleteAuth(`/task-lists/${deleteListModalId}`, token);
+      setWorkspace((prev) => prev ? {
+        ...prev,
+        taskLists: prev.taskLists.filter((l) => l.id !== deleteListModalId),
+      } : prev);
+      if (selectedListId === deleteListModalId) setSelectedListId(null);
+      showToast('Task list permanently deleted');
+      setDeleteListModalId(null);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to delete task list');
+    } finally {
+      setDeleteListLoading(false);
+    }
   }
 
   async function handleMoveTask() {
@@ -2329,6 +2375,19 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                                   <ChevronDown className="h-3 w-3 flex-shrink-0" />Move Down
                                 </button>
                               )}
+                              {isSuperAdmin && (
+                                <>
+                                  <div style={{ borderTop: '1px solid var(--border-default)', margin: '2px 0' }} />
+                                  <button type="button"
+                                    onClick={() => handleDeleteTaskList(tl.id)}
+                                    className="flex w-full items-center gap-2 px-3 py-2 text-xs text-left"
+                                    style={{ color: 'var(--state-error)' }}
+                                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--state-error-soft)')}
+                                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '')}>
+                                    <Trash2 className="h-3 w-3 flex-shrink-0" />Delete List
+                                  </button>
+                                </>
+                              )}
                             </div>
                           )}
                         </div>
@@ -2853,6 +2912,88 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
           externalUpdateKey={taskUpdateKeys[selectedTaskId] ?? 0}
           linkedRecordsUpdateKey={linkedRecordsUpdateKeys[selectedTaskId] ?? 0}
           highlightFileId={highlightedFileId ?? undefined} />
+      )}
+
+      {/* ── Delete Task Confirmation Modal ───────────────────────────────────── */}
+      {deleteTaskModalId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(0,0,0,0.4)' }}>
+          <div className="w-full max-w-sm rounded-xl border shadow-xl p-6" style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-base font-semibold" style={{ color: 'var(--state-error)' }}>Permanently Delete Task</h3>
+              <button type="button" onClick={() => setDeleteTaskModalId(null)} style={{ color: 'var(--text-muted)' }}>
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <p className="mb-4 text-xs" style={{ color: 'var(--text-muted)' }}>
+              This action is <strong>irreversible</strong>. The task and its comments will be permanently removed.
+              Tasks with subtasks, file attachments, or linked records cannot be deleted.
+            </p>
+            <p className="mb-2 text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+              Type <strong>DELETE</strong> to confirm:
+            </p>
+            <input
+              type="text"
+              value={deleteTaskConfirmText}
+              onChange={(e) => setDeleteTaskConfirmText(e.target.value)}
+              placeholder="DELETE"
+              className="mb-4 w-full rounded-lg border px-3 py-1.5 text-sm"
+              style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)', color: 'var(--text-primary)' }}
+            />
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setDeleteTaskModalId(null)}
+                className="rounded-lg border px-4 py-1.5 text-sm"
+                style={{ borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}>Cancel</button>
+              <button type="button"
+                disabled={deleteTaskConfirmText !== 'DELETE' || deleteTaskLoading}
+                onClick={() => void handleConfirmDeleteTask()}
+                className="flex items-center gap-1.5 rounded-lg px-4 py-1.5 text-sm font-medium text-white disabled:opacity-40"
+                style={{ backgroundColor: 'var(--state-error)' }}>
+                {deleteTaskLoading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}Delete Permanently
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Delete Task List Confirmation Modal ───────────────────────────────── */}
+      {deleteListModalId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(0,0,0,0.4)' }}>
+          <div className="w-full max-w-sm rounded-xl border shadow-xl p-6" style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-base font-semibold" style={{ color: 'var(--state-error)' }}>Permanently Delete Task List</h3>
+              <button type="button" onClick={() => setDeleteListModalId(null)} style={{ color: 'var(--text-muted)' }}>
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <p className="mb-4 text-xs" style={{ color: 'var(--text-muted)' }}>
+              This action is <strong>irreversible</strong>. The task list will be permanently removed.
+              Task lists that still contain tasks cannot be deleted — move or delete all tasks first.
+            </p>
+            <p className="mb-2 text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+              Type <strong>DELETE</strong> to confirm:
+            </p>
+            <input
+              type="text"
+              value={deleteListConfirmText}
+              onChange={(e) => setDeleteListConfirmText(e.target.value)}
+              placeholder="DELETE"
+              className="mb-4 w-full rounded-lg border px-3 py-1.5 text-sm"
+              style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)', color: 'var(--text-primary)' }}
+            />
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setDeleteListModalId(null)}
+                className="rounded-lg border px-4 py-1.5 text-sm"
+                style={{ borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}>Cancel</button>
+              <button type="button"
+                disabled={deleteListConfirmText !== 'DELETE' || deleteListLoading}
+                onClick={() => void handleConfirmDeleteTaskList()}
+                className="flex items-center gap-1.5 rounded-lg px-4 py-1.5 text-sm font-medium text-white disabled:opacity-40"
+                style={{ backgroundColor: 'var(--state-error)' }}>
+                {deleteListLoading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}Delete Permanently
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── Assign Department Modal ───────────────────────────────────────────── */}

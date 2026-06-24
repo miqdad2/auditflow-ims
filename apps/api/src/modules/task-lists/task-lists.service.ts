@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -98,6 +98,43 @@ export class TaskListsService {
     });
 
     return updated;
+  }
+
+  async delete(id: string, actorId: string, actorRoles: string[]) {
+    // Permanent deletion is restricted to SUPER_ADMIN only
+    if (!actorRoles.includes('SUPER_ADMIN')) {
+      throw new ForbiddenException('Only Super Admin can permanently delete task lists.');
+    }
+
+    const list = await this.prisma.taskList.findUnique({
+      where: { id },
+      include: { _count: { select: { tasks: true } } },
+    });
+    if (!list) throw new NotFoundException('Task list not found');
+
+    // Block deletion if the list contains tasks — must be emptied first
+    if (list._count.tasks > 0) {
+      throw new ConflictException(`Cannot delete a task list that still contains ${list._count.tasks} task(s). Move or delete all tasks first.`);
+    }
+
+    const snapshot = { name: list.name, workspaceId: list.workspaceId };
+    await this.prisma.taskList.delete({ where: { id } });
+
+    await this.auditLog.log({
+      actorId,
+      action: 'TASK_LIST_PERMANENTLY_DELETED',
+      entityType: 'TASK_LIST',
+      entityId: id,
+      previousValue: snapshot,
+    });
+
+    try {
+      this.realtime.emitToWorkspace(list.workspaceId, 'task_list.deleted', {
+        id, workspaceId: list.workspaceId,
+      });
+    } catch { /* realtime failure does not undo deletion */ }
+
+    return { success: true };
   }
 
   async reorder(

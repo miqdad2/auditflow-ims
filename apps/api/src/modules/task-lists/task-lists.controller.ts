@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Patch, Param, Body, UseGuards,
+  Controller, Get, Post, Patch, Delete, Param, Body, UseGuards,
 } from '@nestjs/common';
 import { IsArray, IsString } from 'class-validator';
 
@@ -63,5 +63,15 @@ export class TaskListsController {
   ) {
     const roles = extractUserRoles(user);
     return this.svc.reorder(workspaceId, dto.orderedIds, user.id as string, roles);
+  }
+
+  @Delete('task-lists/:id')
+  @RequirePermissions('project.update')
+  deleteTaskList(
+    @Param('id') id: string,
+    @CurrentUser() user: Record<string, unknown>,
+  ) {
+    const roles = extractUserRoles(user);
+    return this.svc.delete(id, user.id as string, roles);
   }
 }
