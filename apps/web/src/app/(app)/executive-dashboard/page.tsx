@@ -176,6 +176,27 @@ function fmtDate(iso: string | null | undefined): string {
   return new Date(iso).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+export function getFirstName(fullName: string): string {
+  const first = fullName.trim().split(/\s+/)[0];
+  return first ?? fullName;
+}
+
+export function getGreeting(hour: number, firstName: string): string {
+  if (hour >= 5  && hour < 12) return `Good morning, ${firstName}.`;
+  if (hour >= 12 && hour < 17) return `Good afternoon, ${firstName}.`;
+  if (hour >= 17 && hour < 21) return `Good evening, ${firstName}.`;
+  return `Welcome back, ${firstName}.`;
+}
+
+function healthRowBg(health: string): string {
+  switch (health) {
+    case 'CRITICAL':  return 'color-mix(in srgb, var(--state-error) 5%, transparent)';
+    case 'AT_RISK':   return 'color-mix(in srgb, var(--state-warning) 4%, transparent)';
+    case 'ATTENTION': return 'color-mix(in srgb, var(--state-warning) 3%, transparent)';
+    default:          return '';
+  }
+}
+
 // ─── Executive Summary strip builder ─────────────────────────────────────────
 
 interface SummaryItem { label: string; value: string; color: string }
@@ -381,6 +402,7 @@ export default function ExecutiveDashboardPage() {
   const [lastUpdated, setLastUpdated] = useState<string>('');
   const [highlighted, setHighlighted] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
+  const [greetingText, setGreetingText] = useState('');
 
   const fetchingRef    = useRef(false);
   const isInitialLoad  = useRef(true);
@@ -395,6 +417,16 @@ export default function ExecutiveDashboardPage() {
       if (highlightTimer.current) clearTimeout(highlightTimer.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (!user?.fullName) return;
+    const fn = getFirstName(user.fullName);
+    const h = parseInt(
+      new Date().toLocaleTimeString('en-GB', { hour: 'numeric', hour12: false, timeZone: 'Asia/Kuwait' }),
+      10,
+    );
+    setGreetingText(getGreeting(isNaN(h) ? 9 : h, fn));
+  }, [user?.fullName]);
 
   const isExecutive = user?.dashboardExperience === 'EXECUTIVE';
 
@@ -505,7 +537,7 @@ export default function ExecutiveDashboardPage() {
         <div className="px-6 py-5" style={{ borderLeft: '4px solid var(--sidebar-bg)' }}>
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div className="min-w-0">
-              <div className="flex items-center gap-2 mb-1 flex-wrap">
+              <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                 <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
                   RECAFCO AuditFlow IMS
                 </span>
@@ -523,12 +555,17 @@ export default function ExecutiveDashboardPage() {
                   {connected ? 'Live' : 'Reconnecting'}
                 </span>
               </div>
+              {greetingText && (
+                <p className="text-sm font-semibold mb-0.5" style={{ color: 'var(--sidebar-bg)' }}>
+                  {greetingText}
+                </p>
+              )}
               <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>
                 Executive Operations &amp; Compliance Overview
               </h1>
               {!hasNoWorkspaceAccess && (
                 <p className="mt-0.5 text-sm" style={{ color: 'var(--text-muted)', maxWidth: '70ch' }}>
-                  Real-time visibility into organizational performance, compliance risks, pending decisions, and operational priorities.
+                  Here is the latest view of organizational performance, compliance risk, pending decisions, and operational priorities.
                 </p>
               )}
             </div>
@@ -595,7 +632,8 @@ export default function ExecutiveDashboardPage() {
               transition: reducedMotion ? 'none' : 'box-shadow 0.7s ease',
             }}
           >
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            {/* Primary KPIs — 6 strategic metrics */}
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
               <KpiCard
                 label="Compliance Health"
                 value={summary.complianceHealth !== null ? `${summary.complianceHealth}%` : null}
@@ -638,20 +676,68 @@ export default function ExecutiveDashboardPage() {
                 subtext={summary.expiringFiles === 0 ? 'No files expiring soon' : 'Expired or expiring in 30 days'}
                 reducedMotion={reducedMotion}
               />
-              <KpiCard
-                label="Awaiting Review"
-                value={summary.tasksAwaitingReview}
-                icon={Activity} status={awaitStatus}
-                subtext={summary.tasksAwaitingReview === 0 ? 'No tasks pending review' : 'Tasks pending approval'}
-                reducedMotion={reducedMotion}
-              />
-              <KpiCard
-                label="Completion Rate"
-                value={summary.completionRate !== null ? `${summary.completionRate}%` : null}
-                icon={Target} status={rateStatus}
-                trend={trends.weeklyTrend}
-                reducedMotion={reducedMotion}
-              />
+            </div>
+
+            {/* Secondary performance strip — Awaiting Review | Completion Rate | Completed This Week */}
+            <div
+              className="rounded-xl border overflow-hidden mt-1"
+              style={{ backgroundColor: 'var(--bg-subtle)', borderColor: 'var(--border-default)' }}
+            >
+              <div className="grid grid-cols-1 divide-y sm:grid-cols-3 sm:divide-x sm:divide-y-0"
+                style={{ '--tw-divide-opacity': '1', borderColor: 'var(--border-default)' } as React.CSSProperties}>
+                <div className="flex items-center justify-between px-5 py-3.5">
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
+                      Awaiting Review
+                    </p>
+                    <p className="mt-1 text-xl font-bold"
+                      style={{ color: summary.tasksAwaitingReview > 0 ? 'var(--state-warning)' : 'var(--text-secondary)' }}>
+                      {summary.tasksAwaitingReview}
+                    </p>
+                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                      {summary.tasksAwaitingReview === 0 ? 'None pending' : 'Tasks pending approval'}
+                    </p>
+                  </div>
+                  <Activity className="h-5 w-5 shrink-0"
+                    style={{ color: summary.tasksAwaitingReview > 0 ? 'var(--state-warning)' : 'var(--text-disabled)' }} />
+                </div>
+                <div className="flex items-center justify-between px-5 py-3.5">
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
+                      Completion Rate
+                    </p>
+                    <p className="mt-1 text-xl font-bold"
+                      style={{ color: summary.completionRate === null ? 'var(--text-disabled)' : kpiStyle(rateStatus).accent }}>
+                      {summary.completionRate !== null ? `${summary.completionRate}%` : 'N/A'}
+                    </p>
+                    {trends.weeklyTrend !== null && (
+                      <span className="flex items-center gap-0.5 text-xs font-semibold mt-0.5"
+                        style={{ color: trends.weeklyTrend >= 0 ? 'var(--state-success)' : 'var(--state-error)' }}>
+                        {trends.weeklyTrend >= 0
+                          ? <TrendingUp className="h-3 w-3" />
+                          : <TrendingDown className="h-3 w-3" />}
+                        {Math.abs(trends.weeklyTrend)}% vs last week
+                      </span>
+                    )}
+                  </div>
+                  <Target className="h-5 w-5 shrink-0"
+                    style={{ color: summary.completionRate === null ? 'var(--text-disabled)' : kpiStyle(rateStatus).accent }} />
+                </div>
+                <div className="flex items-center justify-between px-5 py-3.5">
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
+                      Completed This Week
+                    </p>
+                    <p className="mt-1 text-xl font-bold" style={{ color: 'var(--text-primary)' }}>
+                      {trends.completedThisWeek}
+                    </p>
+                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                      {trends.completedLastWeek} completed last week
+                    </p>
+                  </div>
+                  <CheckCircle2 className="h-5 w-5 shrink-0" style={{ color: 'var(--text-disabled)' }} />
+                </div>
+              </div>
             </div>
           </div>
 
@@ -806,8 +892,14 @@ export default function ExecutiveDashboardPage() {
                       const hc = healthColor(row.health);
                       return (
                         <tr key={row.workspaceId}
-                          className="hover:bg-slate-50 transition-colors"
-                          style={{ borderBottom: '1px solid var(--border-default)' }}>
+                          className="transition-colors"
+                          style={{
+                            borderBottom: '1px solid var(--border-default)',
+                            backgroundColor: healthRowBg(row.health) || undefined,
+                          }}
+                          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = 'var(--bg-subtle)'; }}
+                          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = healthRowBg(row.health); }}
+                        >
                           <td className="px-4 py-3 font-semibold" style={{ color: 'var(--text-primary)' }}>
                             <Link href={`/workspaces/${row.workspaceId}`} className="hover:underline underline-offset-2">
                               {row.workspaceName}

@@ -49,13 +49,13 @@ const RESTRICTED_NAV = [
   { label: 'Notifications',  href: '/notifications',   icon: Bell },
 ];
 
-// Executive users: one Dashboard entry, Workspaces, Reports, Notifications. No My Tasks.
+// Executive users: one Dashboard entry, Reports, Notifications.
+// ISO Workspaces is hidden — drill-down is available from dashboard cards.
 // Dashboard href is resolved dynamically to /executive-dashboard in the render loop.
 const EXECUTIVE_NAV = [
-  { label: 'Dashboard',      href: '/dashboard',       icon: LayoutDashboard },
-  { label: 'ISO Workspaces', href: '/workspaces',      icon: FolderOpen },
-  { label: 'Reports',        href: '/reports',         icon: BarChart2 },
-  { label: 'Notifications',  href: '/notifications',   icon: Bell },
+  { label: 'Dashboard',     href: '/dashboard',      icon: LayoutDashboard },
+  { label: 'Reports',       href: '/reports',         icon: BarChart2 },
+  { label: 'Notifications', href: '/notifications',   icon: Bell },
 ];
 
 // DEPARTMENT roles see most items but not reports
