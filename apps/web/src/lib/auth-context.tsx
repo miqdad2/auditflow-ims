@@ -2,16 +2,20 @@
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
 
+export type DashboardExperience = 'STANDARD' | 'EXECUTIVE';
+
 export interface AuthUser {
   id: string;
   email: string;
   username: string;
   fullName: string;
+  jobTitle: string | null;
   departmentId: string | null;
   department: { id: string; name: string } | null;
   roles: string[];
   permissions: string[];
   mustChangePassword: boolean;
+  dashboardExperience: DashboardExperience;
 }
 
 interface AuthContextValue {

@@ -17,6 +17,7 @@ import {
   Bug,
   Building2,
   Zap,
+  BarChart3,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 
@@ -105,6 +106,8 @@ export function AppSidebar() {
   const canManageUsers = isAdmin || isBusinessAdmin;
   // Departments: SUPER_ADMIN and SUPER_USER only — IT_ADMIN manages system, not business master data
   const canManageDepts = isSuperAdmin || isBusinessAdmin;
+  // Executive Dashboard: elevated users who have been assigned executive dashboard experience
+  const isExecutiveDashboard = isElevated && user?.dashboardExperience === 'EXECUTIVE';
   const displayName = user?.fullName ?? 'User';
 
   const navItems = isElevated
@@ -171,6 +174,18 @@ export function AppSidebar() {
             const active = pathname === href || pathname.startsWith(`${href}/`);
             return <NavItem key={href} href={href} icon={icon} label={label} active={active} />;
           })}
+
+          {/* Executive Dashboard: elevated users with EXECUTIVE dashboard experience */}
+          {isExecutiveDashboard && (
+            <li>
+              <NavItem
+                href="/executive-dashboard"
+                icon={BarChart3}
+                label="Executive Overview"
+                active={pathname.startsWith('/executive-dashboard')}
+              />
+            </li>
+          )}
 
           {/* Action Center: SUPER_USER, SUPER_ADMIN */}
           {canAccessActionCenter && (
@@ -263,7 +278,7 @@ export function AppSidebar() {
               className="truncate text-xs leading-tight"
               style={{ color: 'var(--sidebar-muted)' }}
             >
-              {roles[0] ?? ''}
+              {user?.jobTitle ?? roles[0] ?? ''}
             </p>
           </div>
         </div>

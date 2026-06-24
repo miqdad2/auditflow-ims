@@ -24,15 +24,19 @@ interface UserWorkspaceMembership {
   workspace: { id: string; name: string; status: string; visibility: string; };
 }
 interface WorkspaceOption { id: string; name: string; status: string; }
+type DashboardExperience = 'STANDARD' | 'EXECUTIVE';
+
 interface UserRow {
   id: string;
   email: string;
   username: string;
   fullName: string;
+  jobTitle: string | null;
   isActive: boolean;
   mustChangePassword: boolean;
   lastLoginAt: string | null;
   createdAt: string;
+  dashboardExperience: DashboardExperience;
   department: { id: string; name: string; code: string } | null;
   userRoles: Array<{ role: Role }>;
 }
@@ -108,15 +112,19 @@ const BLANK_CREATE = {
   email: '',
   fullName: '',
   username: '',
+  jobTitle: '',
   departmentId: '',
   systemAccess: 'NORMAL_USER',
   temporaryPassword: '',
+  dashboardExperience: 'STANDARD' as DashboardExperience,
 };
 
 const BLANK_EDIT = {
   fullName: '',
+  jobTitle: '',
   departmentId: '',
   systemAccess: 'NORMAL_USER',
+  dashboardExperience: 'STANDARD' as DashboardExperience,
 };
 
 // ─── Page ────────────────────────────────────────────────────────────────────
@@ -267,13 +275,15 @@ export default function UsersPage() {
       const targetRole = roles.find((r) => r.name === internalRoleName);
 
       const createdUser = await apiPostAuth<UserRow>('/users', {
-        email:            createForm.email,
-        fullName:         createForm.fullName,
-        username:         createForm.username || undefined,
-        departmentId:     createForm.departmentId || undefined,
-        roleIds:          targetRole ? [targetRole.id] : [],
-        temporaryPassword: createForm.temporaryPassword,
-        isActive:         true,
+        email:               createForm.email,
+        fullName:            createForm.fullName,
+        username:            createForm.username || undefined,
+        jobTitle:            createForm.jobTitle.trim() || undefined,
+        departmentId:        createForm.departmentId || undefined,
+        roleIds:             targetRole ? [targetRole.id] : [],
+        temporaryPassword:   createForm.temporaryPassword,
+        isActive:            true,
+        dashboardExperience: createForm.dashboardExperience,
       }, token);
 
       // Add staged workspace memberships
@@ -321,9 +331,11 @@ export default function UsersPage() {
       const targetRole = roles.find((r) => r.name === internalRoleName);
 
       await apiPatchAuth(`/users/${editUser.id}`, {
-        fullName:     editForm.fullName,
-        departmentId: editForm.departmentId || undefined,
-        roleIds:      targetRole ? [targetRole.id] : [],
+        fullName:            editForm.fullName,
+        jobTitle:            editForm.jobTitle.trim() || undefined,
+        departmentId:        editForm.departmentId || undefined,
+        roleIds:             targetRole ? [targetRole.id] : [],
+        dashboardExperience: editForm.dashboardExperience,
       }, token);
       setEditUser(null);
       showToast('User updated');
@@ -394,9 +406,11 @@ export default function UsersPage() {
   function openEdit(u: UserRow) {
     setEditUser(u);
     setEditForm({
-      fullName:     u.fullName,
-      departmentId: u.department?.id ?? '',
-      systemAccess: getAccessLevel(u.userRoles),
+      fullName:            u.fullName,
+      jobTitle:            u.jobTitle ?? '',
+      departmentId:        u.department?.id ?? '',
+      systemAccess:        getAccessLevel(u.userRoles),
+      dashboardExperience: u.dashboardExperience ?? 'STANDARD',
     });
     setEditError('');
     setActionMenu(null);
@@ -586,7 +600,7 @@ export default function UsersPage() {
           <table className="w-full border-collapse">
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border-default)' }}>
-                {['Name', 'Email', 'Department', 'System Access', 'Status', 'Last Login', ''].map((h) => (
+                {['Name', 'Job Title', 'Department', 'System Access', 'Dashboard', 'Status', 'Last Login', ''].map((h) => (
                   <th key={h} className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide"
                     style={{ color: 'var(--text-muted)', backgroundColor: 'var(--bg-subtle)' }}>{h}</th>
                 ))}
@@ -597,6 +611,7 @@ export default function UsersPage() {
                 const access = getAccessLevel(u.userRoles);
                 const cfg = ACCESS_CONFIG[access];
                 const AccessIcon = cfg.icon;
+                const isExecutive = (u.dashboardExperience ?? 'STANDARD') === 'EXECUTIVE';
                 return (
                   <tr key={u.id} className="transition-colors"
                     style={{ borderBottom: '1px solid var(--border-subtle)' }}
@@ -614,7 +629,11 @@ export default function UsersPage() {
                         </div>
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-sm" style={{ color: 'var(--text-secondary)' }}>{u.email}</td>
+                    <td className="px-4 py-3 text-sm max-w-[140px]" style={{ color: 'var(--text-secondary)' }}>
+                      <span className="block truncate" title={u.jobTitle ?? undefined}>
+                        {u.jobTitle ?? <span style={{ color: 'var(--text-disabled)' }}>—</span>}
+                      </span>
+                    </td>
                     <td className="px-4 py-3 text-sm" style={{ color: 'var(--text-secondary)' }}>
                       {u.department?.name ?? <span style={{ color: 'var(--text-disabled)' }}>—</span>}
                     </td>
@@ -624,6 +643,16 @@ export default function UsersPage() {
                         <AccessIcon className="h-3 w-3" />
                         {cfg.label}
                       </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      {isExecutive ? (
+                        <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium"
+                          style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent-primary)', border: '1px solid var(--accent-primary)' }}>
+                          Executive
+                        </span>
+                      ) : (
+                        <span className="text-xs" style={{ color: 'var(--text-disabled)' }}>Standard</span>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium"
@@ -741,16 +770,27 @@ export default function UsersPage() {
                 </div>
               </div>
 
-              {/* Department */}
-              <div>
-                <label className="mb-1 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Department</label>
-                <select value={createForm.departmentId}
-                  onChange={(e) => setCreateForm((p) => ({ ...p, departmentId: e.target.value }))}
-                  className="w-full rounded-lg border px-3 py-1.5 text-sm"
-                  style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)', color: 'var(--text-primary)' }}>
-                  <option value="">No Department</option>
-                  {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-                </select>
+              {/* Job Title + Department */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Job Title</label>
+                  <input type="text" value={createForm.jobTitle}
+                    onChange={(e) => setCreateForm((p) => ({ ...p, jobTitle: e.target.value }))}
+                    placeholder="e.g. Factory Manager"
+                    maxLength={120}
+                    className="w-full rounded-lg border px-3 py-1.5 text-sm"
+                    style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)', color: 'var(--text-primary)' }} />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Department</label>
+                  <select value={createForm.departmentId}
+                    onChange={(e) => setCreateForm((p) => ({ ...p, departmentId: e.target.value }))}
+                    className="w-full rounded-lg border px-3 py-1.5 text-sm"
+                    style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)', color: 'var(--text-primary)' }}>
+                    <option value="">No Department</option>
+                    {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  </select>
+                </div>
               </div>
 
               {/* System Access */}
@@ -780,6 +820,38 @@ export default function UsersPage() {
                             <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{label}</span>
                           </div>
                           <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>{cfg.description}</p>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Dashboard Experience */}
+              <div>
+                <label className="mb-1 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Dashboard Experience</label>
+                <p className="mb-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  Dashboard experience changes the user's landing page and presentation only. It does not grant permissions or workspace access.
+                </p>
+                <div className="flex flex-col gap-2">
+                  {([
+                    { value: 'STANDARD', label: 'Standard Dashboard', desc: 'Operational workspace, task, document, issue, and assigned-work overview.' },
+                    { value: 'EXECUTIVE', label: 'Executive Dashboard', desc: 'One-page management overview of organizational performance, compliance risk, pending decisions, and operational priorities.' },
+                  ] as { value: DashboardExperience; label: string; desc: string }[]).map(({ value, label, desc }) => {
+                    const selected = createForm.dashboardExperience === value;
+                    return (
+                      <label key={value}
+                        className="flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors"
+                        style={{
+                          borderColor: selected ? 'var(--accent-primary)' : 'var(--border-default)',
+                          backgroundColor: selected ? 'var(--accent-soft)' : 'var(--bg-subtle)',
+                        }}>
+                        <input type="radio" name="dashboardExperience" value={value} checked={selected}
+                          onChange={() => setCreateForm((p) => ({ ...p, dashboardExperience: value }))}
+                          className="mt-0.5 accent-blue-600" />
+                        <div>
+                          <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{label}</span>
+                          <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>{desc}</p>
                         </div>
                       </label>
                     );
@@ -917,12 +989,24 @@ export default function UsersPage() {
             </div>
 
             <form onSubmit={(e) => void handleEdit(e)} className="flex flex-col gap-4">
-              <div>
-                <label className="mb-1 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Full Name *</label>
-                <input required type="text" value={editForm.fullName}
-                  onChange={(e) => setEditForm((p) => ({ ...p, fullName: e.target.value }))}
-                  className="w-full rounded-lg border px-3 py-1.5 text-sm"
-                  style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)', color: 'var(--text-primary)' }} />
+              {/* Name + Job Title */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Full Name *</label>
+                  <input required type="text" value={editForm.fullName}
+                    onChange={(e) => setEditForm((p) => ({ ...p, fullName: e.target.value }))}
+                    className="w-full rounded-lg border px-3 py-1.5 text-sm"
+                    style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)', color: 'var(--text-primary)' }} />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Job Title</label>
+                  <input type="text" value={editForm.jobTitle}
+                    onChange={(e) => setEditForm((p) => ({ ...p, jobTitle: e.target.value }))}
+                    placeholder="e.g. Factory Manager"
+                    maxLength={120}
+                    className="w-full rounded-lg border px-3 py-1.5 text-sm"
+                    style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)', color: 'var(--text-primary)' }} />
+                </div>
               </div>
               <div>
                 <label className="mb-1 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Department</label>
@@ -979,6 +1063,38 @@ export default function UsersPage() {
                       </div>
                     </div>
                   )}
+                </div>
+              </div>
+
+              {/* Dashboard Experience */}
+              <div>
+                <label className="mb-1 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Dashboard Experience</label>
+                <p className="mb-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  Changes the user's landing page and presentation only. Does not grant permissions or workspace access.
+                </p>
+                <div className="flex flex-col gap-2">
+                  {([
+                    { value: 'STANDARD', label: 'Standard Dashboard', desc: 'Operational workspace, task, document, issue, and assigned-work overview.' },
+                    { value: 'EXECUTIVE', label: 'Executive Dashboard', desc: 'One-page management overview of organizational performance, compliance risk, pending decisions, and operational priorities.' },
+                  ] as { value: DashboardExperience; label: string; desc: string }[]).map(({ value, label, desc }) => {
+                    const selected = editForm.dashboardExperience === value;
+                    return (
+                      <label key={value}
+                        className="flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors"
+                        style={{
+                          borderColor: selected ? 'var(--accent-primary)' : 'var(--border-default)',
+                          backgroundColor: selected ? 'var(--accent-soft)' : 'var(--bg-subtle)',
+                        }}>
+                        <input type="radio" name="editDashboardExperience" value={value} checked={selected}
+                          onChange={() => setEditForm((p) => ({ ...p, dashboardExperience: value }))}
+                          className="mt-0.5 accent-blue-600" />
+                        <div>
+                          <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{label}</span>
+                          <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>{desc}</p>
+                        </div>
+                      </label>
+                    );
+                  })}
                 </div>
               </div>
 

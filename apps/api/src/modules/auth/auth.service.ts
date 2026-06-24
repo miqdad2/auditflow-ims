@@ -109,11 +109,13 @@ export class AuthService {
         email: user.email,
         username: user.username,
         fullName: user.fullName,
+        jobTitle: user.jobTitle ?? null,
         departmentId: user.departmentId,
         department: user.department,
         roles,
         permissions,
         mustChangePassword: user.mustChangePassword,
+        dashboardExperience: user.dashboardExperience ?? 'STANDARD',
       },
     };
   }
@@ -179,12 +181,14 @@ export class AuthService {
       email: user.email,
       username: user.username,
       fullName: user.fullName,
+      jobTitle: (user.jobTitle as string | null) ?? null,
       departmentId: user.departmentId,
       department: user.department,
       roles,
       permissions,
       mustChangePassword: user.mustChangePassword,
       lastLoginAt: user.lastLoginAt,
+      dashboardExperience: (user.dashboardExperience as string) ?? 'STANDARD',
     };
   }
 }

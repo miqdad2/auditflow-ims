@@ -792,4 +792,379 @@ export class DashboardService {
       };
     });
   }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Executive Dashboard Summary  (Unit 65)
+  // Backend-scoped. Requires ELEVATED tier. No cross-workspace leakage.
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async getExecutiveSummary(actorId: string, actorRoles: string[], actorDeptId: string | null) {
+    const now  = new Date();
+    const in30  = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const eod  = endOfDayKuwait(now);
+
+    const [
+      activeWorkspaceCount,
+      taskCounts,
+      overdueTaskCount,
+      docCounts,
+      expiredDocCount,
+      expiringDocCount,
+      ncrCounts,
+      checklistCounts,
+      pendingDocDecisions,
+      attentionTasks,
+      attentionFiles,
+      workspaces,
+      recentSignificantActivity,
+    ] = await Promise.all([
+      this.prisma.workspace.count({ where: { status: 'ACTIVE' } }),
+
+      this.prisma.task.groupBy({
+        by: ['status'],
+        where: { parentTaskId: null, isReference: false, approvalStatus: 'APPROVED' },
+        _count: { id: true },
+      }),
+
+      this.prisma.task.count({
+        where: {
+          parentTaskId: null, isReference: false, approvalStatus: 'APPROVED',
+          dueDate: { lt: eod },
+          status: { notIn: ['COMPLETED', 'CANCELLED'] },
+        },
+      }),
+
+      this.prisma.document.groupBy({ by: ['status'], where: {}, _count: { id: true } }),
+
+      this.prisma.document.count({ where: { status: 'APPROVED', expiryDate: { lt: now } } }),
+      this.prisma.document.count({ where: { status: 'APPROVED', expiryDate: { gte: now, lte: in30 } } }),
+
+      this.prisma.ncrCapa.groupBy({ by: ['status'], where: {}, _count: { id: true } }),
+      this.prisma.auditChecklistItem.groupBy({ by: ['status'], where: {}, _count: { id: true } }),
+
+      // Documents pending review (pending decisions)
+      this.prisma.document.findMany({
+        where: { status: 'UNDER_REVIEW' },
+        orderBy: { updatedAt: 'asc' },
+        take: 20,
+        select: {
+          id: true, title: true, updatedAt: true,
+          department: { select: { name: true } },
+          createdBy:  { select: { id: true, fullName: true } },
+          workspace:  { select: { id: true, name: true } },
+        },
+      }),
+
+      // Critical/high overdue tasks for attention panel
+      this.prisma.task.findMany({
+        where: {
+          parentTaskId: null, isReference: false, approvalStatus: 'APPROVED',
+          status: { notIn: ['COMPLETED', 'CANCELLED'] },
+          dueDate: { lt: eod },
+          priority: { in: ['HIGH', 'CRITICAL'] },
+        },
+        orderBy: [{ priority: 'desc' }, { dueDate: 'asc' }],
+        take: 15,
+        select: {
+          id: true, title: true, status: true, priority: true, dueDate: true,
+          assignee:  { select: { id: true, fullName: true } },
+          workspace: { select: { id: true, name: true } },
+        },
+      }),
+
+      // Expired/expiring controlled documents
+      this.prisma.document.findMany({
+        where: {
+          status: 'APPROVED',
+          OR: [{ expiryDate: { lt: now } }, { expiryDate: { gte: now, lte: in30 } }],
+        },
+        orderBy: { expiryDate: 'asc' },
+        take: 10,
+        select: {
+          id: true, title: true, expiryDate: true,
+          department: { select: { name: true } },
+          owner:      { select: { id: true, fullName: true } },
+          workspace:  { select: { id: true, name: true } },
+        },
+      }),
+
+      // Workspaces for org health table
+      this.prisma.workspace.findMany({
+        where: { status: 'ACTIVE' },
+        orderBy: { name: 'asc' },
+        take: 50,
+        select: {
+          id: true, name: true, departmentId: true,
+          department: { select: { name: true } },
+        },
+      }),
+
+      // Recent significant audit log entries
+      this.prisma.auditLog.findMany({
+        where: {
+          action: {
+            in: [
+              'APPROVED', 'REJECTED', 'ARCHIVED',
+              'EVIDENCE_APPROVED', 'EVIDENCE_REJECTED',
+              'NCR_VERIFIED', 'NCR_CLOSED',
+              'REACTIVATED', 'DEACTIVATED',
+            ],
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+        select: {
+          id: true, action: true, entityType: true, entityId: true, createdAt: true,
+          actor: { select: { id: true, fullName: true } },
+        },
+      }),
+    ]);
+
+    // ─── KPI aggregation ──────────────────────────────────────────────────────
+    const taskMap = Object.fromEntries(taskCounts.map((g) => [g.status, g._count.id]));
+    const docMap  = Object.fromEntries(docCounts.map((g)  => [g.status, g._count.id]));
+    const ncrMap  = Object.fromEntries(ncrCounts.map((g)  => [g.status, g._count.id]));
+    const ciMap   = Object.fromEntries(checklistCounts.map((g) => [g.status, g._count.id]));
+
+    const totalTasks     = Object.values(taskMap).reduce((s, v) => s + v, 0);
+    const completedTasks = taskMap['COMPLETED'] ?? 0;
+    const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+
+    const ciTotal    = Object.values(ciMap).reduce((s, v) => s + v, 0);
+    const ciApproved = ciMap['APPROVED'] ?? 0;
+    const evidenceReadiness = ciTotal > 0 ? Math.round((ciApproved / ciTotal) * 100) : 0;
+
+    const docTotal       = Object.values(docMap).reduce((s, v) => s + v, 0);
+    const docApproved    = docMap['APPROVED'] ?? 0;
+    const docApprovalRate = docTotal > 0 ? Math.round((docApproved / docTotal) * 100) : 0;
+
+    const ncrTotal  = Object.values(ncrMap).reduce((s, v) => s + v, 0);
+    const ncrClosed = (ncrMap['VERIFIED'] ?? 0) + (ncrMap['CLOSED'] ?? 0);
+    const ncrResolutionRate = ncrTotal > 0 ? Math.round((ncrClosed / ncrTotal) * 100) : 100;
+
+    const complianceHealth = Math.round(
+      evidenceReadiness * 0.40 + docApprovalRate * 0.35 + ncrResolutionRate * 0.25,
+    );
+
+    const criticalIssues         = (ncrMap['OPEN'] ?? 0) + (ncrMap['OVERDUE'] ?? 0);
+    const overdueActions         = overdueTaskCount + (ncrMap['OVERDUE'] ?? 0);
+    const pendingDecisionsCount  = pendingDocDecisions.length;
+    const expiringFilesCount     = expiredDocCount + expiringDocCount;
+    const waitingReview          = taskMap['WAITING_REVIEW'] ?? 0;
+
+    // ─── Attention items ──────────────────────────────────────────────────────
+    type AttentionItem = {
+      id: string; type: string; title: string; workspace: string | null;
+      department: string | null; responsible: string | null;
+      severity: string; overdueAge: string | null; action: string;
+    };
+
+    const attentionItems: AttentionItem[] = [];
+
+    for (const t of attentionTasks) {
+      const daysOverdue = t.dueDate
+        ? Math.floor((now.getTime() - new Date(t.dueDate).getTime()) / 86400000)
+        : null;
+      attentionItems.push({
+        id: t.id, type: 'TASK', title: t.title,
+        workspace: t.workspace?.name ?? null, department: null,
+        responsible: t.assignee?.fullName ?? null,
+        severity: t.priority,
+        overdueAge: daysOverdue !== null ? `${daysOverdue}d overdue` : null,
+        action: 'Review task',
+      });
+    }
+
+    for (const f of attentionFiles) {
+      const daysUntil = f.expiryDate
+        ? Math.floor((new Date(f.expiryDate).getTime() - now.getTime()) / 86400000)
+        : null;
+      attentionItems.push({
+        id: f.id, type: 'DOCUMENT', title: f.title,
+        workspace: f.workspace?.name ?? null, department: f.department?.name ?? null,
+        responsible: f.owner?.fullName ?? null,
+        severity: daysUntil !== null && daysUntil < 0 ? 'CRITICAL' : 'HIGH',
+        overdueAge: daysUntil !== null
+          ? daysUntil < 0 ? `Expired ${Math.abs(daysUntil)}d ago` : `Expires in ${daysUntil}d`
+          : null,
+        action: 'Review document',
+      });
+    }
+
+    // ─── Org health per workspace ─────────────────────────────────────────────
+    const wsIds = workspaces.map((w) => w.id);
+
+    const [wsTaskGroups, wsNcrGroups, wsOverdueGroups] = wsIds.length > 0
+      ? await Promise.all([
+          this.prisma.task.groupBy({
+            by: ['workspaceId', 'status'],
+            where: { workspaceId: { in: wsIds }, parentTaskId: null, isReference: false, approvalStatus: 'APPROVED' },
+            _count: { id: true },
+          }),
+          this.prisma.ncrCapa.groupBy({
+            by: ['workspaceId', 'status'],
+            where: { workspaceId: { in: wsIds } },
+            _count: { id: true },
+          }),
+          this.prisma.task.groupBy({
+            by: ['workspaceId'],
+            where: {
+              workspaceId: { in: wsIds }, parentTaskId: null, isReference: false, approvalStatus: 'APPROVED',
+              dueDate: { lt: eod }, status: { notIn: ['COMPLETED', 'CANCELLED'] },
+            },
+            _count: { id: true },
+          }),
+        ])
+      : [[], [], []];
+
+    const wsTaskMap = new Map<string, Record<string, number>>();
+    for (const g of wsTaskGroups as Array<{ workspaceId: string; status: string; _count: { id: number } }>) {
+      if (!g.workspaceId) continue;
+      const e = wsTaskMap.get(g.workspaceId) ?? {};
+      e[g.status] = g._count.id;
+      wsTaskMap.set(g.workspaceId, e);
+    }
+
+    const wsNcrMap = new Map<string, Record<string, number>>();
+    for (const g of wsNcrGroups as Array<{ workspaceId: string | null; status: string; _count: { id: number } }>) {
+      if (!g.workspaceId) continue;
+      const e = wsNcrMap.get(g.workspaceId) ?? {};
+      e[g.status] = g._count.id;
+      wsNcrMap.set(g.workspaceId, e);
+    }
+
+    const wsOverdueMap = new Map<string, number>();
+    for (const g of wsOverdueGroups as Array<{ workspaceId: string; _count: { id: number } }>) {
+      if (g.workspaceId) wsOverdueMap.set(g.workspaceId, g._count.id);
+    }
+
+    function computeHealth(overdue: number, critNcr: number, total: number, completed: number): string {
+      if (critNcr > 5 || overdue > 10) return 'CRITICAL';
+      if (critNcr > 2 || overdue > 5)  return 'AT_RISK';
+      if (critNcr > 0 || overdue > 0)  return 'ATTENTION';
+      const rate = total > 0 ? completed / total : 1;
+      return rate >= 0.6 ? 'ON_TRACK' : 'ATTENTION';
+    }
+
+    const HEALTH_LABEL: Record<string, string> = {
+      ON_TRACK: 'On Track', ATTENTION: 'Attention Required',
+      AT_RISK: 'At Risk',   CRITICAL: 'Critical',
+    };
+
+    const organizationHealth = workspaces.map((ws) => {
+      const tasks    = wsTaskMap.get(ws.id) ?? {};
+      const ncrs     = wsNcrMap.get(ws.id)  ?? {};
+      const overdue  = wsOverdueMap.get(ws.id) ?? 0;
+      const total    = Object.values(tasks).reduce((s, v) => s + v, 0);
+      const done     = tasks['COMPLETED'] ?? 0;
+      const critNcr  = (ncrs['OPEN'] ?? 0) + (ncrs['OVERDUE'] ?? 0);
+      const allNcr   = Object.values(ncrs).reduce((s, v) => s + v, 0);
+      const prog     = total > 0 ? Math.round((done / total) * 100) : 0;
+      const health   = computeHealth(overdue, critNcr, total, done);
+      return {
+        workspaceId: ws.id, workspaceName: ws.name, department: ws.department?.name ?? null,
+        health, healthLabel: HEALTH_LABEL[health], progress: prog,
+        openTasks: total - done, overdueTasks: overdue,
+        criticalIssues: critNcr, totalIssues: allNcr,
+      };
+    });
+
+    // ─── Pending decisions ────────────────────────────────────────────────────
+    const pendingDecisions = pendingDocDecisions.map((d) => ({
+      type: 'DOCUMENT_REVIEW' as const,
+      id: d.id, title: d.title,
+      department: d.department?.name ?? null,
+      workspace: d.workspace?.name ?? null,
+      requester: d.createdBy.fullName,
+      submittedAt: d.updatedAt.toISOString(),
+      priority: 'MEDIUM',
+    }));
+
+    // ─── Department performance ───────────────────────────────────────────────
+    const deptPerfMap = new Map<string, {
+      deptId: string; deptName: string;
+      taskTotal: number; taskCompleted: number; taskOverdue: number; issueCount: number;
+    }>();
+
+    for (const ws of workspaces) {
+      if (!ws.departmentId || !ws.department?.name) continue;
+      const d = deptPerfMap.get(ws.departmentId) ?? {
+        deptId: ws.departmentId, deptName: ws.department.name,
+        taskTotal: 0, taskCompleted: 0, taskOverdue: 0, issueCount: 0,
+      };
+      const tasks = wsTaskMap.get(ws.id) ?? {};
+      const ncrs  = wsNcrMap.get(ws.id)  ?? {};
+      d.taskTotal     += Object.values(tasks).reduce((s, v) => s + v, 0);
+      d.taskCompleted += tasks['COMPLETED'] ?? 0;
+      d.taskOverdue   += wsOverdueMap.get(ws.id) ?? 0;
+      d.issueCount    += Object.values(ncrs).reduce((s, v) => s + v, 0);
+      deptPerfMap.set(ws.departmentId, d);
+    }
+
+    const departmentPerformance = [...deptPerfMap.values()].map((d) => ({
+      departmentId:   d.deptId,
+      departmentName: d.deptName,
+      completionRate: d.taskTotal > 0 ? Math.round((d.taskCompleted / d.taskTotal) * 100) : 0,
+      overdueCount:   d.taskOverdue,
+      issueCount:     d.issueCount,
+    })).sort((a, b) => b.completionRate - a.completionRate);
+
+    // ─── Significant activity ─────────────────────────────────────────────────
+    const significantActivity = recentSignificantActivity.map((log) => ({
+      id: log.id, action: log.action, entityType: log.entityType,
+      entityId: log.entityId ?? null,
+      actor: log.actor?.fullName ?? 'System',
+      timestamp: log.createdAt.toISOString(),
+    }));
+
+    // ─── Weekly trend (only when baseline exists) ─────────────────────────────
+    const sevenDaysAgo    = new Date(now.getTime() - 7  * 86400000);
+    const fourteenDaysAgo = new Date(now.getTime() - 14 * 86400000);
+
+    const [completedThisWeek, completedLastWeek] = await Promise.all([
+      this.prisma.task.count({
+        where: {
+          parentTaskId: null, isReference: false, approvalStatus: 'APPROVED',
+          status: 'COMPLETED', updatedAt: { gte: sevenDaysAgo },
+        },
+      }),
+      this.prisma.task.count({
+        where: {
+          parentTaskId: null, isReference: false, approvalStatus: 'APPROVED',
+          status: 'COMPLETED', updatedAt: { gte: fourteenDaysAgo, lt: sevenDaysAgo },
+        },
+      }),
+    ]);
+
+    const weeklyTrend = completedLastWeek > 0
+      ? Math.round(((completedThisWeek - completedLastWeek) / completedLastWeek) * 100)
+      : null;
+
+    return {
+      summary: {
+        complianceHealth,
+        activeWorkspaces:    activeWorkspaceCount,
+        criticalIssues,
+        overdueActions,
+        pendingDecisionsCount,
+        expiringFiles:       expiringFilesCount,
+        tasksAwaitingReview: waitingReview,
+        completionRate,
+      },
+      attentionItems:       attentionItems.slice(0, 20),
+      organizationHealth,
+      pendingDecisions,
+      trends: {
+        completedThisWeek,
+        completedLastWeek,
+        weeklyTrend,
+        evidenceReadiness,
+        docApprovalRate,
+        ncrResolutionRate,
+      },
+      departmentPerformance,
+      significantActivity,
+      generatedAt: now.toISOString(),
+    };
+  }
 }

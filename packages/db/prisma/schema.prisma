@@ -78,21 +78,30 @@ model RolePermission {
   @@map("role_permissions")
 }
 
+// ─── DashboardExperience ──────────────────────────────────────────────────────
+
+enum DashboardExperience {
+  STANDARD
+  EXECUTIVE
+}
+
 // ─── User ─────────────────────────────────────────────────────────────────────
 
 model User {
-  id                 String    @id @default(cuid())
-  email              String    @unique
-  username           String    @unique
-  passwordHash       String
-  fullName           String
-  departmentId       String?
-  isActive           Boolean   @default(true)
-  mustChangePassword Boolean   @default(false)
-  passwordChangedAt  DateTime?
-  lastLoginAt        DateTime?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  id                  String              @id @default(cuid())
+  email               String              @unique
+  username            String              @unique
+  passwordHash        String
+  fullName            String
+  jobTitle            String?
+  departmentId        String?
+  isActive            Boolean             @default(true)
+  mustChangePassword  Boolean             @default(false)
+  passwordChangedAt   DateTime?
+  lastLoginAt         DateTime?
+  dashboardExperience DashboardExperience @default(STANDARD)
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
 
   department                Department?           @relation(fields: [departmentId], references: [id])
   userRoles                 UserRole[]

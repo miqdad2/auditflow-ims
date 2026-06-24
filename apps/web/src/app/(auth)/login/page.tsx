@@ -32,9 +32,14 @@ export default function LoginPage() {
         { login: loginField.trim(), password },
       );
       login(data.accessToken, data.user);
-      // Route directly to change-password when a temporary password must be replaced.
-      // This avoids a brief dashboard flash before the (app) layout catches the flag.
-      router.replace(data.user.mustChangePassword ? '/change-password' : '/dashboard');
+      // Forced password reset takes priority over dashboard routing.
+      if (data.user.mustChangePassword) {
+        router.replace('/change-password');
+      } else if (data.user.dashboardExperience === 'EXECUTIVE') {
+        router.replace('/executive-dashboard');
+      } else {
+        router.replace('/dashboard');
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Login failed. Please try again.');
     } finally {

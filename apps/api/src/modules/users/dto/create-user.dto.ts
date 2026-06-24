@@ -1,6 +1,11 @@
 import {
-  IsEmail, IsString, IsOptional, IsBoolean, IsArray, MinLength,
+  IsEmail, IsString, IsOptional, IsBoolean, IsArray, MinLength, IsEnum, MaxLength,
 } from 'class-validator';
+
+export enum DashboardExperienceDto {
+  STANDARD  = 'STANDARD',
+  EXECUTIVE = 'EXECUTIVE',
+}
 
 export class CreateUserDto {
   @IsEmail()
@@ -12,6 +17,11 @@ export class CreateUserDto {
   @IsString()
   @IsOptional()
   username?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(120)
+  jobTitle?: string;
 
   @IsString()
   @IsOptional()
@@ -29,4 +39,8 @@ export class CreateUserDto {
   @IsBoolean()
   @IsOptional()
   isActive?: boolean;
+
+  @IsEnum(DashboardExperienceDto)
+  @IsOptional()
+  dashboardExperience?: DashboardExperienceDto;
 }

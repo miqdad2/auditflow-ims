@@ -40,7 +40,7 @@ export default function ChangePasswordPage() {
       return;
     }
     if (!user.mustChangePassword) {
-      router.replace('/dashboard');
+      router.replace(user.dashboardExperience === 'EXECUTIVE' ? '/executive-dashboard' : '/dashboard');
     }
   }, [user, isLoading, router]);
 
@@ -87,7 +87,7 @@ export default function ChangePasswordPage() {
         token!,
       );
       updateUser({ mustChangePassword: false });
-      router.replace('/dashboard');
+      router.replace(user?.dashboardExperience === 'EXECUTIVE' ? '/executive-dashboard' : '/dashboard');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to change password. Please try again.');
     } finally {

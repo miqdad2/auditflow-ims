@@ -38,9 +38,11 @@ const USER_SELECT = {
   email: true,
   username: true,
   fullName: true,
+  jobTitle: true,
   isActive: true,
   mustChangePassword: true,
   lastLoginAt: true,
+  dashboardExperience: true,
   createdAt: true,
   updatedAt: true,
   department: { select: { id: true, name: true, code: true } },
@@ -164,9 +166,11 @@ export class UsersService {
         username,
         passwordHash,
         fullName: dto.fullName,
+        jobTitle: dto.jobTitle?.trim() || null,
         departmentId: dto.departmentId ?? null,
         isActive: dto.isActive ?? true,
         mustChangePassword: true,
+        dashboardExperience: dto.dashboardExperience ?? 'STANDARD',
         ...(dto.roleIds && dto.roleIds.length > 0
           ? {
               userRoles: {
@@ -199,6 +203,8 @@ export class UsersService {
     const updateData: Record<string, unknown> = {};
     if (dto.fullName !== undefined) updateData.fullName = dto.fullName;
     if (dto.departmentId !== undefined) updateData.departmentId = dto.departmentId;
+    if (dto.jobTitle !== undefined) updateData.jobTitle = dto.jobTitle?.trim() || null;
+    if (dto.dashboardExperience !== undefined) updateData.dashboardExperience = dto.dashboardExperience;
 
     await this.prisma.$transaction(async (tx) => {
       if (dto.roleIds !== undefined) {
