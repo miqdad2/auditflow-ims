@@ -79,6 +79,10 @@ export interface WorkspaceMetrics {
   expiredFiles: number;
   /** Files within their configured reminderDays window */
   expiringFiles: number;
+
+  // ── Approval workflow metrics (Unit 63.1) ──────────────────────────────────
+  /** MEMBER-created tasks still awaiting reviewer decision — not included in operational counts */
+  pendingApprovalTasks: number;
 }
 
 /** Computed result of the operational status engine */
@@ -105,6 +109,8 @@ export interface WorkspaceStatusResult {
     expiredFiles: number;
     expiringFiles: number;
     operationalMembers: number;
+    /** PENDING approval tasks — informational, not part of operational counts */
+    pendingApprovalTasks: number;
   };
 }
 
@@ -246,6 +252,7 @@ export function computeWorkspaceOperationalStatus(m: WorkspaceMetrics): Workspac
     expiredFiles:               m.expiredFiles,
     expiringFiles:              m.expiringFiles,
     operationalMembers:         m.operationalMembers,
+    pendingApprovalTasks:       m.pendingApprovalTasks,
   };
 
   // ── 1. INACTIVE ────────────────────────────────────────────────────────────

@@ -29,6 +29,18 @@ export enum TaskStatus {
   CANCELLED = "CANCELLED",
 }
 
+// ─── Task Approval Status (Unit 63.1) ─────────────────────────────────────────
+// Keeps approval state separate from work status.
+// Default for all existing tasks and elevated-created tasks: APPROVED.
+// Normal MEMBER-created tasks start as PENDING until a reviewer decides.
+
+export enum TaskApprovalStatus {
+  PENDING  = "PENDING",   // awaiting reviewer — private, excluded from official metrics
+  APPROVED = "APPROVED",  // official workspace task
+  RETURNED = "RETURNED",  // reviewer returned request for creator correction + resubmit
+  REJECTED = "REJECTED",  // reviewer rejected — read-only for creator
+}
+
 // ─── Document Status ──────────────────────────────────────────────────────────
 
 export enum DocumentStatus {
@@ -135,6 +147,11 @@ export enum NotificationCategory {
   TASK_REJECTED = "TASK_REJECTED",
   TASK_CANCELLED = "TASK_CANCELLED",
   TASK_REOPENED = "TASK_REOPENED",
+  // Approval workflow notifications (Unit 63.1)
+  TASK_PENDING_APPROVAL = "TASK_PENDING_APPROVAL",   // sent to reviewers on MEMBER task creation
+  TASK_APPROVAL_APPROVED = "TASK_APPROVAL_APPROVED", // sent to creator when approved
+  TASK_APPROVAL_RETURNED = "TASK_APPROVAL_RETURNED", // sent to creator when returned for correction
+  TASK_APPROVAL_REJECTED = "TASK_APPROVAL_REJECTED", // sent to creator when rejected
   EVIDENCE_SUBMITTED = "EVIDENCE_SUBMITTED",
   EVIDENCE_REJECTED = "EVIDENCE_REJECTED",
   DOCUMENT_REVIEW_PENDING = "DOCUMENT_REVIEW_PENDING",

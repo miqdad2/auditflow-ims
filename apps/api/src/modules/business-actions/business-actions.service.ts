@@ -285,8 +285,9 @@ export class BusinessActionsService {
     try {
       const tasks = await this.prisma.task.findMany({
         where: {
-          parentTaskId: null,
-          isReference:  false,   // Reference items never produce operational overdue alerts
+          parentTaskId:   null,
+          isReference:    false,
+          approvalStatus: 'APPROVED', // Unit 63.1: PENDING tasks are not operational — exclude from BAC
           dueDate: { not: null, lt: eod },
           status: { notIn: ['COMPLETED', 'CANCELLED'] },
         },
@@ -345,9 +346,10 @@ export class BusinessActionsService {
     try {
       const tasks = await this.prisma.task.findMany({
         where: {
-          parentTaskId: null,
-          isReference:  false,   // Reference items do not require an assignee
-          assigneeId:   null,
+          parentTaskId:   null,
+          isReference:    false,
+          approvalStatus: 'APPROVED', // Unit 63.1: PENDING tasks not operational — exclude from BAC
+          assigneeId:     null,
           status: { notIn: ['COMPLETED', 'CANCELLED'] },
         },
         select: {

@@ -168,9 +168,10 @@ export class ReportsService {
     const ncrBaseWhere  = this.ncrWhere(tier, actorId, actorDeptId, filters);
 
     // isReference: false — reference items are excluded from all operational task KPIs
-    const overdueTaskWhere  = { ...taskBaseWhere, parentTaskId: null as null, isReference: false, dueDate: { lt: now }, status: { notIn: ['COMPLETED', 'CANCELLED'] } };
-    const openTaskWhere     = { ...taskBaseWhere, parentTaskId: null as null, isReference: false, status: { notIn: ['COMPLETED', 'CANCELLED'] } };
-    const doneInPeriodWhere = { ...taskBaseWhere, parentTaskId: null as null, isReference: false, status: 'COMPLETED', completedAt: { gte: dateFrom, lte: dateTo } };
+    // approvalStatus: 'APPROVED' — Unit 63.1: PENDING member tasks excluded from reports
+    const overdueTaskWhere  = { ...taskBaseWhere, parentTaskId: null as null, isReference: false, approvalStatus: 'APPROVED', dueDate: { lt: now }, status: { notIn: ['COMPLETED', 'CANCELLED'] } };
+    const openTaskWhere     = { ...taskBaseWhere, parentTaskId: null as null, isReference: false, approvalStatus: 'APPROVED', status: { notIn: ['COMPLETED', 'CANCELLED'] } };
+    const doneInPeriodWhere = { ...taskBaseWhere, parentTaskId: null as null, isReference: false, approvalStatus: 'APPROVED', status: 'COMPLETED', completedAt: { gte: dateFrom, lte: dateTo } };
     const openNcrWhere      = { ...ncrBaseWhere, status: { in: ['OPEN', 'IN_PROGRESS', 'OVERDUE'] } };
 
     // ── Main parallel batch ──────────────────────────────────────────────────
@@ -388,9 +389,9 @@ export class ReportsService {
       const [wsDocRev, wsTotalDoc, wsTaskDetail, wsNcrDetail, wsDeptActive, wsExpiredAtt, wsExpiringSoonAtt] = await Promise.all([
         this.prisma.document.groupBy({ by: ['workspaceId'], where: { workspaceId: { in: wsIds }, status: 'UNDER_REVIEW' }, _count: { id: true } }),
         this.prisma.document.groupBy({ by: ['workspaceId'], where: { workspaceId: { in: wsIds } }, _count: { id: true } }),
-        // Task detail rows for the operational status engine (non-reference parent tasks)
+        // Task detail rows for the operational status engine (non-reference parent tasks, APPROVED only — Unit 63.1)
         this.prisma.task.findMany({
-          where: { workspaceId: { in: wsIds }, isReference: false, parentTaskId: null },
+          where: { workspaceId: { in: wsIds }, isReference: false, parentTaskId: null, approvalStatus: 'APPROVED' },
           select: { id: true, workspaceId: true, status: true, priority: true, assigneeId: true, dueDate: true },
         }),
         // NCR detail rows (non-terminal)
@@ -529,6 +530,7 @@ export class ReportsService {
           issuesWaitingVerification,
           expiredFiles,
           expiringFiles,
+          pendingApprovalTasks: 0, // pre-filtered to APPROVED above
         });
 
         return {
@@ -627,8 +629,8 @@ export class ReportsService {
 
         if (allDeptWsIds.length > 0) {
           const [dOpenT, dOvdT, dDocRev, dIssue] = await Promise.all([
-            this.prisma.task.groupBy({ by: ['workspaceId'], where: { workspaceId: { in: allDeptWsIds }, isReference: false, status: { notIn: ['COMPLETED', 'CANCELLED'] }, parentTaskId: null }, _count: { id: true } }),
-            this.prisma.task.groupBy({ by: ['workspaceId'], where: { workspaceId: { in: allDeptWsIds }, isReference: false, dueDate: { lt: now }, status: { notIn: ['COMPLETED', 'CANCELLED'] }, parentTaskId: null }, _count: { id: true } }),
+            this.prisma.task.groupBy({ by: ['workspaceId'], where: { workspaceId: { in: allDeptWsIds }, isReference: false, approvalStatus: 'APPROVED', status: { notIn: ['COMPLETED', 'CANCELLED'] }, parentTaskId: null }, _count: { id: true } }),
+            this.prisma.task.groupBy({ by: ['workspaceId'], where: { workspaceId: { in: allDeptWsIds }, isReference: false, approvalStatus: 'APPROVED', dueDate: { lt: now }, status: { notIn: ['COMPLETED', 'CANCELLED'] }, parentTaskId: null }, _count: { id: true } }),
             this.prisma.document.groupBy({ by: ['workspaceId'], where: { workspaceId: { in: allDeptWsIds }, status: 'UNDER_REVIEW' }, _count: { id: true } }),
             this.prisma.ncrCapa.groupBy({ by: ['workspaceId'], where: { workspaceId: { in: allDeptWsIds }, status: { in: ['OPEN', 'IN_PROGRESS', 'OVERDUE'] } }, _count: { id: true } }),
           ]);

@@ -13,6 +13,35 @@ import { WorkspacesService } from '../workspaces/workspaces.service';
 // Elevated roles: can access all attachments regardless of workspace/department.
 const ELEVATED_ROLES = ['SUPER_ADMIN', 'IT_ADMIN', 'ISO_MANAGER', 'QHSE_USER', 'SUPER_USER'] as const;
 
+// Valid validity periods for new uploads (CUSTOM_EXISTING is backfill-only).
+export const VALIDITY_PERIODS = ['NONE', 'ONE_MONTH', 'THREE_MONTHS', 'SIX_MONTHS', 'ONE_YEAR'] as const;
+export type ValidityPeriod = typeof VALIDITY_PERIODS[number] | 'CUSTOM_EXISTING';
+
+// Kuwait timezone offset — UTC+3, no DST.
+const KUWAIT_OFFSET_MS = 3 * 60 * 60 * 1000;
+
+/**
+ * Computes the expiry date from a validity period using calendar arithmetic.
+ * Returns null for NONE and CUSTOM_EXISTING (no new expiry calculated).
+ * Expiry is snapped to end-of-day Kuwait time (23:59:59.999 Kuwait = 20:59:59.999 UTC).
+ */
+export function computeExpiryDate(period: ValidityPeriod, startDate: Date): Date | null {
+  if (period === 'NONE' || period === 'CUSTOM_EXISTING') return null;
+
+  const d = new Date(startDate);
+  switch (period) {
+    case 'ONE_MONTH':     d.setMonth(d.getMonth() + 1);       break;
+    case 'THREE_MONTHS':  d.setMonth(d.getMonth() + 3);       break;
+    case 'SIX_MONTHS':    d.setMonth(d.getMonth() + 6);       break;
+    case 'ONE_YEAR':      d.setFullYear(d.getFullYear() + 1); break;
+  }
+
+  // Snap to end-of-day Kuwait time
+  const shifted = new Date(d.getTime() + KUWAIT_OFFSET_MS);
+  shifted.setUTCHours(23, 59, 59, 999);
+  return new Date(shifted.getTime() - KUWAIT_OFFSET_MS);
+}
+
 // storagePath is intentionally excluded — never returned to clients.
 const ATTACHMENT_SELECT = {
   id: true,
@@ -26,21 +55,24 @@ const ATTACHMENT_SELECT = {
   createdAt: true,
   uploadedBy: { select: { id: true, fullName: true } },
   // Expiry tracking fields
-  displayName:   true,
-  issueDate:     true,
-  expiryDate:    true,
-  reminderDays:  true,
-  notes:         true,
-  isSuperseded:  true,
-  renewedFromId: true,
+  displayName:       true,
+  issueDate:         true,
+  expiryDate:        true,
+  reminderDays:      true,
+  notes:             true,
+  isSuperseded:      true,
+  renewedFromId:     true,
+  validityPeriod:    true,
+  validityStartDate: true,
 };
 
 export interface AttachmentMetaDto {
-  displayName?:  string;
-  issueDate?:    string; // ISO date string
-  expiryDate?:   string; // ISO date string
-  reminderDays?: number;
-  notes?:        string;
+  displayName?:    string;
+  issueDate?:      string; // ISO date string (legacy only)
+  expiryDate?:     string; // ISO date string (Set Validity for CUSTOM_EXISTING legacy files only)
+  reminderDays?:   number;
+  notes?:          string;
+  validityPeriod?: string; // NONE | ONE_MONTH | THREE_MONTHS | SIX_MONTHS | ONE_YEAR (CUSTOM_EXISTING forbidden on new uploads)
 }
 
 @Injectable()
@@ -107,7 +139,24 @@ export class FileAttachmentsService {
       }
     }
 
+    // Validate validityPeriod — CUSTOM_EXISTING is for legacy backfill only
+    if (meta?.validityPeriod) {
+      if (meta.validityPeriod === 'CUSTOM_EXISTING') {
+        throw new BadRequestException('CUSTOM_EXISTING is reserved for legacy files. Use a standard validity period.');
+      }
+      if (!(VALIDITY_PERIODS as readonly string[]).includes(meta.validityPeriod)) {
+        throw new BadRequestException(`Invalid validity period: ${meta.validityPeriod}`);
+      }
+    }
+
     const stored = await this.fileStorage.saveFile(file, `attachments/${entityType.toLowerCase()}`);
+
+    // Compute expiryDate from validityPeriod if provided
+    const uploadDate = new Date();
+    const resolvedValidityPeriod = (meta?.validityPeriod ?? 'NONE') as ValidityPeriod;
+    const computedExpiry = resolvedValidityPeriod !== 'NONE'
+      ? computeExpiryDate(resolvedValidityPeriod, uploadDate)
+      : null;
 
     let attachment: Record<string, unknown>;
     try {
@@ -123,11 +172,13 @@ export class FileAttachmentsService {
           entityType,
           entityId,
           // Optional expiry metadata
-          displayName:  meta?.displayName  ?? null,
-          issueDate:    meta?.issueDate    ? new Date(meta.issueDate)  : null,
-          expiryDate:   meta?.expiryDate   ? new Date(meta.expiryDate) : null,
-          reminderDays: meta?.reminderDays ?? null,
-          notes:        meta?.notes        ?? null,
+          displayName:       meta?.displayName  ?? null,
+          issueDate:         null, // server-controlled; not set on initial upload
+          expiryDate:        computedExpiry,
+          reminderDays:      meta?.reminderDays ?? null,
+          notes:             meta?.notes        ?? null,
+          validityPeriod:    resolvedValidityPeriod,
+          validityStartDate: resolvedValidityPeriod !== 'NONE' ? uploadDate : null,
         },
         select: ATTACHMENT_SELECT,
       }) as Record<string, unknown>;
@@ -151,10 +202,9 @@ export class FileAttachmentsService {
     // Resolve workspace once — used for expiry notification, duplicate-document warning and realtime emit.
     const wsId = await this.resolveWorkspaceId(entityType, entityId);
 
-    // If expiry metadata was provided and expiry is within the reminder window, create notification
-    if (meta?.expiryDate && meta.reminderDays) {
-      const expiry = new Date(meta.expiryDate);
-      const daysUntil = Math.ceil((expiry.getTime() - Date.now()) / 86400000);
+    // If expiry was computed and is within the reminder window, create an immediate notification
+    if (computedExpiry && meta?.reminderDays) {
+      const daysUntil = Math.ceil((computedExpiry.getTime() - Date.now()) / 86400000);
       if (daysUntil >= 0 && daysUntil <= meta.reminderDays) {
         void this.notifications.create({
           recipientId: actorId,
@@ -677,7 +727,7 @@ export class FileAttachmentsService {
   ) {
     const att = await this.prisma.fileAttachment.findUnique({
       where: { id },
-      select: { id: true, uploadedById: true, entityType: true, entityId: true },
+      select: { id: true, uploadedById: true, entityType: true, entityId: true, validityPeriod: true, expiryDate: true },
     });
     if (!att) throw new NotFoundException('Attachment not found');
 
@@ -694,14 +744,45 @@ export class FileAttachmentsService {
       }
     }
 
+    // Resolve new expiry date from validityPeriod (if provided)
+    let resolvedExpiryDate: Date | null | undefined = undefined; // undefined = Prisma skips the field
+    let resolvedValidityPeriod: string | undefined = undefined;
+    let resolvedValidityStartDate: Date | null | undefined = undefined;
+
+    if (meta.validityPeriod !== undefined) {
+      const period = meta.validityPeriod as ValidityPeriod;
+      if (period === 'CUSTOM_EXISTING') {
+        // Legacy Set Validity: keep existing expiryDate, just mark period
+        resolvedValidityPeriod = 'CUSTOM_EXISTING';
+        resolvedExpiryDate     = meta.expiryDate ? new Date(meta.expiryDate) : (att.expiryDate ?? null);
+        resolvedValidityStartDate = undefined; // not applicable
+      } else if (period === 'NONE') {
+        resolvedValidityPeriod    = 'NONE';
+        resolvedExpiryDate        = null;
+        resolvedValidityStartDate = null;
+      } else if ((VALIDITY_PERIODS as readonly string[]).includes(period)) {
+        // Standard period: compute expiry from today
+        const startDate = new Date();
+        resolvedValidityPeriod    = period;
+        resolvedValidityStartDate = startDate;
+        resolvedExpiryDate        = computeExpiryDate(period, startDate);
+      } else {
+        throw new BadRequestException(`Invalid validity period: ${meta.validityPeriod}`);
+      }
+    } else if (meta.expiryDate !== undefined) {
+      // Direct expiryDate patch (legacy CUSTOM_EXISTING Set Validity without period change)
+      resolvedExpiryDate = meta.expiryDate ? new Date(meta.expiryDate) : null;
+    }
+
     const updated = await this.prisma.fileAttachment.update({
       where: { id },
       data: {
-        displayName:  meta.displayName  ?? undefined,
-        issueDate:    meta.issueDate    ? new Date(meta.issueDate)  : undefined,
-        expiryDate:   meta.expiryDate   ? new Date(meta.expiryDate) : undefined,
-        reminderDays: meta.reminderDays ?? undefined,
-        notes:        meta.notes        ?? undefined,
+        displayName:       meta.displayName       ?? undefined,
+        notes:             meta.notes             ?? undefined,
+        reminderDays:      meta.reminderDays      ?? undefined,
+        expiryDate:        resolvedExpiryDate,
+        validityPeriod:    resolvedValidityPeriod,
+        validityStartDate: resolvedValidityStartDate,
       },
       select: ATTACHMENT_SELECT,
     });
@@ -711,7 +792,12 @@ export class FileAttachmentsService {
       action: 'UPDATED',
       entityType: att.entityType,
       entityId:   att.entityId,
-      newValue:   { attachmentId: id, expiryDate: meta.expiryDate, displayName: meta.displayName },
+      newValue:   {
+        attachmentId:   id,
+        validityPeriod: resolvedValidityPeriod,
+        expiryDate:     resolvedExpiryDate?.toISOString() ?? null,
+        displayName:    meta.displayName,
+      },
     });
 
     return updated;
@@ -752,8 +838,19 @@ export class FileAttachmentsService {
         await this.workspaces.assertWorkspaceAccess(task.workspaceId, actorId, actorRoles, actorDeptId);
       }
 
+      // Validate validityPeriod if provided on renewal
+      if (meta?.validityPeriod && meta.validityPeriod === 'CUSTOM_EXISTING') {
+        throw new BadRequestException('CUSTOM_EXISTING is reserved for legacy files. Use a standard validity period.');
+      }
+
       // Store file
       const stored = await this.fileStorage.saveFile(file, `attachments/${old.entityType.toLowerCase()}`);
+
+      // Compute renewal expiry
+      const renewDate = new Date();
+      const renewValidityPeriod = (meta?.validityPeriod ?? 'NONE') as ValidityPeriod;
+      const renewExpiry = renewValidityPeriod !== 'NONE' ? computeExpiryDate(renewValidityPeriod, renewDate) : null;
+
       let newAtt: Record<string, unknown>;
       try {
         // Create new attachment
@@ -769,11 +866,13 @@ export class FileAttachmentsService {
             entityType:       old.entityType,
             entityId:         old.entityId,
             displayName:      meta?.displayName  ?? null,
-            issueDate:        meta?.issueDate    ? new Date(meta.issueDate)  : null,
-            expiryDate:       meta?.expiryDate   ? new Date(meta.expiryDate) : null,
+            issueDate:        null,
+            expiryDate:       renewExpiry,
             reminderDays:     meta?.reminderDays ?? null,
             notes:            meta?.notes        ?? null,
             renewedFromId:    old.id,
+            validityPeriod:    renewValidityPeriod,
+            validityStartDate: renewValidityPeriod !== 'NONE' ? renewDate : null,
           },
           select: ATTACHMENT_SELECT,
         });

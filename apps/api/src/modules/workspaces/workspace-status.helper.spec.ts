@@ -22,6 +22,7 @@ function activeWorkspace(overrides: Partial<WorkspaceMetrics> = {}): WorkspaceMe
     issuesWaitingVerification:  0,
     expiredFiles:               0,
     expiringFiles:              0,
+    pendingApprovalTasks:       0,
     ...overrides,
   };
 }

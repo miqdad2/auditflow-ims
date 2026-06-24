@@ -29,6 +29,8 @@ export interface WorkspaceOpMetrics {
   expiredFiles: number;
   expiringFiles: number;
   operationalMembers: number;
+  /** MEMBER-created tasks awaiting approval — informational, not in operational counts (Unit 63.1) */
+  pendingApprovalTasks: number;
 }
 
 export interface WorkspaceOwner {
@@ -177,6 +179,12 @@ export interface TaskSummary {
   recurrenceEndDate: string | null;
   recurrenceSeriesId: string | null;
   recurrenceParentId: string | null;
+  // Approval workflow fields (Unit 63.1)
+  approvalStatus: string;            // 'PENDING' | 'APPROVED' | 'RETURNED' | 'REJECTED'
+  approvalNote: string | null;       // creator's business reason
+  approvalReviewNote: string | null; // reviewer's feedback
+  approvalReviewedAt: string | null;
+  approvalReviewedById: string | null;
 }
 
 export interface TaskDetail extends TaskSummary {

@@ -35,11 +35,12 @@ export class FileAttachmentsController {
     const actorDeptId = (user.departmentId as string | null) ?? null;
     // Parse optional expiry metadata from multipart body fields
     const meta: AttachmentMetaDto = {
-      displayName:  body.displayName  || undefined,
-      issueDate:    body.issueDate    || undefined,
-      expiryDate:   body.expiryDate   || undefined,
-      reminderDays: body.reminderDays ? Number(body.reminderDays) : undefined,
-      notes:        body.notes        || undefined,
+      displayName:    body.displayName    || undefined,
+      issueDate:      body.issueDate      || undefined,
+      expiryDate:     body.expiryDate     || undefined,
+      reminderDays:   body.reminderDays   ? Number(body.reminderDays) : undefined,
+      notes:          body.notes          || undefined,
+      validityPeriod: body.validityPeriod || undefined,
     };
     return this.svc.upload(file, 'TASK', id, user.id as string, actorRoles, actorDeptId, meta);
   }
@@ -73,11 +74,12 @@ export class FileAttachmentsController {
     const actorRoles  = extractUserRoles(user);
     const actorDeptId = (user.departmentId as string | null) ?? null;
     const meta: AttachmentMetaDto = {
-      displayName:  body.displayName  || undefined,
-      issueDate:    body.issueDate    || undefined,
-      expiryDate:   body.expiryDate   || undefined,
-      reminderDays: body.reminderDays ? Number(body.reminderDays) : undefined,
-      notes:        body.notes        || undefined,
+      displayName:    body.displayName    || undefined,
+      issueDate:      body.issueDate      || undefined,
+      expiryDate:     body.expiryDate     || undefined,
+      reminderDays:   body.reminderDays   ? Number(body.reminderDays) : undefined,
+      notes:          body.notes          || undefined,
+      validityPeriod: body.validityPeriod || undefined,
     };
     return this.svc.renew(id, file, user.id as string, actorRoles, actorDeptId, meta);
   }

@@ -7,8 +7,8 @@ import {
 } from 'lucide-react';
 import { apiGet, apiPatchAuth } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import type { FileAttachment } from './types';
-import { formatFileSize, getExpiryStatus } from './types';
+import type { FileAttachment, DocumentValidityPeriod } from './types';
+import { formatFileSize, getExpiryStatus, NEW_UPLOAD_VALIDITY_OPTIONS, VALIDITY_PERIOD_LABELS } from './types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
@@ -22,22 +22,19 @@ const REMINDER_OPTIONS = [
 ];
 
 interface ExpiryForm {
-  displayName:    string;
-  issueDate:      string;
-  expiryDate:     string;
-  reminderDays:   number;
-  notes:          string;
-  hasExpiry:      boolean;
-  /** True only when the user has deliberately selected a new reminder value in the edit form.
-   *  Keeps the existing DB reminder intact when editing Display Name / Notes / Expiry Date
-   *  without touching the reminder. Required to protect legacy values (15/30/60/90 days). */
+  displayName:     string;
+  validityPeriod:  DocumentValidityPeriod;
+  /** Only populated when validityPeriod = CUSTOM_EXISTING (legacy Set Validity) */
+  customExpiryDate: string;
+  reminderDays:    number;
+  notes:           string;
+  /** True only when the user has deliberately selected a new reminder value in the edit form. */
   reminderChanged: boolean;
 }
 
 const BLANK_EXPIRY: ExpiryForm = {
-  displayName: '', issueDate: '', expiryDate: '',
-  reminderDays: 14, notes: '', hasExpiry: false,
-  reminderChanged: false,
+  displayName: '', validityPeriod: 'NONE', customExpiryDate: '',
+  reminderDays: 14, notes: '', reminderChanged: false,
 };
 
 interface Props {
@@ -124,11 +121,13 @@ export function FileAttachmentSection({
       const fd = new FormData();
       fd.append('file', file);
       if (meta) {
-        if (meta.displayName)  fd.append('displayName', meta.displayName);
-        if (meta.hasExpiry) {
-          // issueDate is NOT sent — uploaded date is set automatically by the server
-          if (meta.expiryDate)   fd.append('expiryDate',  meta.expiryDate);
+        if (meta.displayName)                 fd.append('displayName',    meta.displayName);
+        if (meta.validityPeriod !== 'NONE') {
+          fd.append('validityPeriod', meta.validityPeriod);
+          // reminderDays is only meaningful when expiry is tracked
           fd.append('reminderDays', String(meta.reminderDays));
+        } else {
+          fd.append('validityPeriod', 'NONE');
         }
         if (meta.notes) fd.append('notes', meta.notes);
       }
@@ -159,7 +158,10 @@ export function FileAttachmentSection({
   function handleAttachFormSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!pendingFile) return;
-    if (expiryForm.hasExpiry && !expiryForm.expiryDate) { setError('Expiry date is required'); return; }
+    // CUSTOM_EXISTING is legacy-only; new uploads use standard validity periods
+    if (expiryForm.validityPeriod === 'CUSTOM_EXISTING' && !expiryForm.customExpiryDate) {
+      setError('Expiry date is required for custom validity'); return;
+    }
     void doUpload(pendingFile, expiryForm);
   }
 
@@ -209,10 +211,9 @@ export function FileAttachmentSection({
     try {
       const fd = new FormData();
       fd.append('file', file);
-      if (renewForm.displayName)  fd.append('displayName', renewForm.displayName);
-      if (renewForm.hasExpiry) {
-        // issueDate is NOT sent — uploaded date is set automatically by the server
-        if (renewForm.expiryDate)   fd.append('expiryDate',  renewForm.expiryDate);
+      if (renewForm.displayName) fd.append('displayName', renewForm.displayName);
+      fd.append('validityPeriod', renewForm.validityPeriod);
+      if (renewForm.validityPeriod !== 'NONE') {
         fd.append('reminderDays', String(renewForm.reminderDays));
       }
       if (renewForm.notes) fd.append('notes', renewForm.notes);
@@ -254,46 +255,46 @@ export function FileAttachmentSection({
   function startEditMeta(att: FileAttachment) {
     setEditingId(att.id);
     setEditError('');
-    // Keep the raw stored value — do NOT normalize legacy values (15/30/60/90) to 14.
-    // The user must explicitly select 7 or 14 to change a legacy reminder.
     const storedReminder = att.reminderDays ?? 14;
+    // Determine initial validity period for edit form
+    const storedPeriod = (att.validityPeriod ?? (att.expiryDate ? 'CUSTOM_EXISTING' : 'NONE')) as DocumentValidityPeriod;
     setEditMetaForm({
-      displayName:    att.displayName  ?? '',
-      issueDate:      '',  // not editable — preserved in DB, not shown in form
-      expiryDate:     att.expiryDate ? new Date(att.expiryDate).toISOString().split('T')[0] : '',
-      reminderDays:   storedReminder,
-      notes:          att.notes ?? '',
-      hasExpiry:      !!att.expiryDate,
-      reminderChanged: false,  // user has NOT changed the reminder yet
+      displayName:      att.displayName ?? '',
+      validityPeriod:   storedPeriod,
+      customExpiryDate: att.expiryDate ? new Date(att.expiryDate).toISOString().split('T')[0] : '',
+      reminderDays:     storedReminder,
+      notes:            att.notes ?? '',
+      reminderChanged:  false,
     });
   }
 
   async function handleSaveMeta(e: React.FormEvent) {
     e.preventDefault();
     if (!editingId || !token) return;
-    if (editMetaForm.hasExpiry && !editMetaForm.expiryDate) {
-      setEditError('Expiry date is required'); return;
+    if (editMetaForm.validityPeriod === 'CUSTOM_EXISTING' && !editMetaForm.customExpiryDate) {
+      setEditError('Expiry date is required for custom validity'); return;
     }
     setEditSaving(true); setEditError('');
     try {
-      // Build body carefully:
-      // - issueDate: not included — historical value preserved in DB
-      // - reminderDays: only sent when:
-      //     (a) expiry is disabled → send null to clear
-      //     (b) user explicitly changed the reminder → send new 7 or 14 value
-      //   When expiry is ON and reminder was NOT changed, omit reminderDays entirely
-      //   so the backend Prisma update skips the field and preserves any legacy value.
       const body: Record<string, unknown> = {
-        displayName: editMetaForm.displayName || null,
-        expiryDate:  editMetaForm.hasExpiry ? editMetaForm.expiryDate || null : null,
-        notes:       editMetaForm.notes || null,
+        displayName:    editMetaForm.displayName || null,
+        notes:          editMetaForm.notes || null,
+        validityPeriod: editMetaForm.validityPeriod,
       };
-      if (!editMetaForm.hasExpiry) {
-        body.reminderDays = null;                          // clear when expiry disabled
-      } else if (editMetaForm.reminderChanged) {
-        body.reminderDays = editMetaForm.reminderDays;    // send only when user explicitly picked 7 or 14
+
+      // For CUSTOM_EXISTING legacy Set Validity, include the manually-entered expiryDate
+      if (editMetaForm.validityPeriod === 'CUSTOM_EXISTING') {
+        body.expiryDate = editMetaForm.customExpiryDate || null;
       }
-      // else: leave reminderDays out of body → backend preserves existing legacy value
+
+      // reminderDays: clear when NONE, send only when user explicitly changed it
+      if (editMetaForm.validityPeriod === 'NONE') {
+        body.reminderDays = null;
+      } else if (editMetaForm.reminderChanged) {
+        body.reminderDays = editMetaForm.reminderDays;
+      }
+      // else: leave reminderDays out → backend preserves existing legacy value
+
       const updated = await apiPatchAuth<FileAttachment>(`/attachments/${editingId}/metadata`, body, token);
       setAttachments((prev) => prev.map((a) => a.id === editingId ? { ...a, ...updated } : a));
       setEditingId(null);
@@ -390,45 +391,41 @@ export function FileAttachmentSection({
                 className="w-full rounded-md border px-2 py-1 text-xs"
                 style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }} />
             </div>
-            <label className="flex cursor-pointer items-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
-              <input type="checkbox" checked={expiryForm.hasExpiry}
-                onChange={(e) => setExpiryForm((f) => ({ ...f, hasExpiry: e.target.checked }))}
-                className="accent-blue-600" />
-              This file has an expiry date
-            </label>
-            {expiryForm.hasExpiry && (
-              <div className="flex flex-col gap-2 pl-4">
-                {/* Uploaded Date — automatic, shown for context */}
-                <div>
-                  <label className="mb-0.5 block text-[10px] font-medium" style={{ color: 'var(--text-secondary)' }}>Uploaded Date</label>
-                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                    Recorded automatically when the file is attached.
-                  </p>
-                </div>
-                <div>
-                  <label className="mb-0.5 block text-[10px] font-medium" style={{ color: 'var(--text-secondary)' }}>Expiry Date *</label>
-                  <input type="date" required value={expiryForm.expiryDate}
-                    onChange={(e) => setExpiryForm((f) => ({ ...f, expiryDate: e.target.value }))}
-                    className="w-full rounded-md border px-2 py-1 text-xs"
-                    style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }} />
-                </div>
-                <div>
-                  <label className="mb-0.5 block text-[10px] font-medium" style={{ color: 'var(--text-secondary)' }}>Remind Before Expiry</label>
-                  <div className="flex gap-3 mt-1">
-                    {REMINDER_OPTIONS.map((o) => (
-                      <label key={o.value} className="flex items-center gap-1.5 cursor-pointer text-xs" style={{ color: 'var(--text-secondary)' }}>
-                        <input
-                          type="radio"
-                          name="expiryReminder"
-                          value={o.value}
-                          checked={expiryForm.reminderDays === o.value}
-                          onChange={() => setExpiryForm((f) => ({ ...f, reminderDays: o.value }))}
-                          className="accent-blue-600"
-                        />
-                        {o.label}
-                      </label>
-                    ))}
-                  </div>
+            <div>
+              <label className="mb-0.5 block text-[10px] font-medium" style={{ color: 'var(--text-secondary)' }}>Validity Period</label>
+              <select
+                value={expiryForm.validityPeriod}
+                onChange={(e) => setExpiryForm((f) => ({ ...f, validityPeriod: e.target.value as DocumentValidityPeriod }))}
+                className="w-full rounded-md border px-2 py-1 text-xs cursor-pointer"
+                style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }}
+              >
+                {NEW_UPLOAD_VALIDITY_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+              {expiryForm.validityPeriod !== 'NONE' && (
+                <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                  Expiry date is calculated automatically from today.
+                </p>
+              )}
+            </div>
+            {expiryForm.validityPeriod !== 'NONE' && (
+              <div className="pl-4">
+                <label className="mb-0.5 block text-[10px] font-medium" style={{ color: 'var(--text-secondary)' }}>Remind Before Expiry</label>
+                <div className="flex gap-3 mt-1">
+                  {REMINDER_OPTIONS.map((o) => (
+                    <label key={o.value} className="flex items-center gap-1.5 cursor-pointer text-xs" style={{ color: 'var(--text-secondary)' }}>
+                      <input
+                        type="radio"
+                        name="expiryReminder"
+                        value={o.value}
+                        checked={expiryForm.reminderDays === o.value}
+                        onChange={() => setExpiryForm((f) => ({ ...f, reminderDays: o.value }))}
+                        className="accent-blue-600"
+                      />
+                      {o.label}
+                    </label>
+                  ))}
                 </div>
               </div>
             )}
@@ -480,44 +477,36 @@ export function FileAttachmentSection({
                 className="w-full rounded-md border px-2 py-1 text-xs"
                 style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }} />
             </div>
-            <label className="flex cursor-pointer items-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
-              <input type="checkbox" checked={renewForm.hasExpiry}
-                onChange={(e) => setRenewForm((f) => ({ ...f, hasExpiry: e.target.checked }))}
-                className="accent-blue-600" />
-              Set new expiry date
-            </label>
-            {renewForm.hasExpiry && (
-              <div className="flex flex-col gap-2 pl-4">
-                <div>
-                  <label className="mb-0.5 block text-[10px] font-medium" style={{ color: 'var(--text-secondary)' }}>Uploaded Date</label>
-                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                    Recorded automatically when the renewal is attached.
-                  </p>
-                </div>
-                <div>
-                  <label className="mb-0.5 block text-[10px] font-medium" style={{ color: 'var(--text-secondary)' }}>New Expiry Date</label>
-                  <input type="date" value={renewForm.expiryDate}
-                    onChange={(e) => setRenewForm((f) => ({ ...f, expiryDate: e.target.value }))}
-                    className="w-full rounded-md border px-2 py-1 text-xs"
-                    style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }} />
-                </div>
-                <div>
-                  <label className="mb-0.5 block text-[10px] font-medium" style={{ color: 'var(--text-secondary)' }}>Remind Before Expiry</label>
-                  <div className="flex gap-3 mt-1">
-                    {REMINDER_OPTIONS.map((o) => (
-                      <label key={o.value} className="flex items-center gap-1.5 cursor-pointer text-xs" style={{ color: 'var(--text-secondary)' }}>
-                        <input
-                          type="radio"
-                          name="renewReminder"
-                          value={o.value}
-                          checked={renewForm.reminderDays === o.value}
-                          onChange={() => setRenewForm((f) => ({ ...f, reminderDays: o.value }))}
-                          className="accent-blue-600"
-                        />
-                        {o.label}
-                      </label>
-                    ))}
-                  </div>
+            <div>
+              <label className="mb-0.5 block text-[10px] font-medium" style={{ color: 'var(--text-secondary)' }}>Validity Period</label>
+              <select
+                value={renewForm.validityPeriod}
+                onChange={(e) => setRenewForm((f) => ({ ...f, validityPeriod: e.target.value as DocumentValidityPeriod }))}
+                className="w-full rounded-md border px-2 py-1 text-xs cursor-pointer"
+                style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }}
+              >
+                {NEW_UPLOAD_VALIDITY_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+            {renewForm.validityPeriod !== 'NONE' && (
+              <div className="pl-4">
+                <label className="mb-0.5 block text-[10px] font-medium" style={{ color: 'var(--text-secondary)' }}>Remind Before Expiry</label>
+                <div className="flex gap-3 mt-1">
+                  {REMINDER_OPTIONS.map((o) => (
+                    <label key={o.value} className="flex items-center gap-1.5 cursor-pointer text-xs" style={{ color: 'var(--text-secondary)' }}>
+                      <input
+                        type="radio"
+                        name="renewReminder"
+                        value={o.value}
+                        checked={renewForm.reminderDays === o.value}
+                        onChange={() => setRenewForm((f) => ({ ...f, reminderDays: o.value }))}
+                        className="accent-blue-600"
+                      />
+                      {o.label}
+                    </label>
+                  ))}
                 </div>
               </div>
             )}
@@ -571,21 +560,31 @@ export function FileAttachmentSection({
                     <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
                       {formatFileSize(att.fileSize)} · Uploaded {new Date(att.createdAt).toLocaleDateString('en-GB')} by {att.uploadedBy.fullName}
                     </span>
-                    {/* Expiry row with reminder setting */}
-                    {showExpiryTracking && att.expiryDate && (
+                    {/* Expiry row with validity period and reminder setting */}
+                    {showExpiryTracking && (att.expiryDate || att.validityPeriod) && (
                       <div className="flex flex-col gap-0.5 mt-0.5">
-                        <div className="flex items-center gap-1.5">
-                          <CalendarDays className="h-3 w-3 flex-shrink-0" style={{ color: 'var(--text-muted)' }} />
-                          <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                            Expires {new Date(att.expiryDate).toLocaleDateString('en-GB')}
-                            {expInfo?.daysLeft !== undefined && expInfo.daysLeft >= 0 && (
-                              <span> · {expInfo.daysLeft}d left</span>
-                            )}
-                            {expInfo?.daysLeft !== undefined && expInfo.daysLeft < 0 && (
-                              <span style={{ color: 'var(--state-error)' }}> · expired</span>
-                            )}
-                          </span>
-                        </div>
+                        {att.validityPeriod && att.validityPeriod !== 'NONE' && (
+                          <div className="flex items-center gap-1">
+                            <Info className="h-3 w-3 flex-shrink-0" style={{ color: 'var(--text-disabled)' }} />
+                            <span className="text-[10px]" style={{ color: 'var(--text-disabled)' }}>
+                              Validity: {VALIDITY_PERIOD_LABELS[att.validityPeriod] ?? att.validityPeriod}
+                            </span>
+                          </div>
+                        )}
+                        {att.expiryDate && (
+                          <div className="flex items-center gap-1.5">
+                            <CalendarDays className="h-3 w-3 flex-shrink-0" style={{ color: 'var(--text-muted)' }} />
+                            <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                              Expires {new Date(att.expiryDate).toLocaleDateString('en-GB')}
+                              {expInfo?.daysLeft !== undefined && expInfo.daysLeft >= 0 && (
+                                <span> · {expInfo.daysLeft}d left</span>
+                              )}
+                              {expInfo?.daysLeft !== undefined && expInfo.daysLeft < 0 && (
+                                <span style={{ color: 'var(--state-error)' }}> · expired</span>
+                              )}
+                            </span>
+                          </div>
+                        )}
                         {att.reminderDays != null && (
                           <span className="text-[10px]" style={{ color: 'var(--text-disabled)' }}>
                             Reminder: {att.reminderDays} days before
@@ -674,58 +673,68 @@ export function FileAttachmentSection({
                           className="w-full rounded-md border px-2 py-1 text-xs"
                           style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }} />
                       </div>
-                      <label className="flex cursor-pointer items-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
-                        <input type="checkbox" checked={editMetaForm.hasExpiry}
-                          onChange={(e) => setEditMetaForm((f) => ({ ...f, hasExpiry: e.target.checked }))}
-                          className="accent-blue-600" />
-                        Has expiry date
-                      </label>
-                      {editMetaForm.hasExpiry && (
-                        <div className="flex flex-col gap-2 pl-4">
-                          <div>
-                            <label className="mb-0.5 block text-[10px] font-medium" style={{ color: 'var(--text-secondary)' }}>Expiry Date *</label>
-                            <input type="date" value={editMetaForm.expiryDate}
-                              onChange={(e) => setEditMetaForm((f) => ({ ...f, expiryDate: e.target.value }))}
-                              className="w-full rounded-md border px-2 py-1 text-xs"
-                              style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }} />
-                          </div>
-                          <div>
-                            <label className="mb-0.5 block text-[10px] font-medium" style={{ color: 'var(--text-secondary)' }}>Remind Before Expiry</label>
-                            {/* Legacy helper — shown when the stored value is not 7 or 14 */}
+                      <div>
+                        <label className="mb-0.5 block text-[10px] font-medium" style={{ color: 'var(--text-secondary)' }}>Validity Period</label>
+                        <select
+                          value={editMetaForm.validityPeriod}
+                          onChange={(e) => setEditMetaForm((f) => ({ ...f, validityPeriod: e.target.value as DocumentValidityPeriod, reminderChanged: false }))}
+                          className="w-full rounded-md border px-2 py-1 text-xs cursor-pointer"
+                          style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }}
+                        >
+                          {/* Show standard options */}
+                          {NEW_UPLOAD_VALIDITY_OPTIONS.map((o) => (
+                            <option key={o.value} value={o.value}>{o.label}</option>
+                          ))}
+                          {/* Show CUSTOM_EXISTING only if the file already has it (legacy) */}
+                          {(att.validityPeriod === 'CUSTOM_EXISTING' || (!att.validityPeriod && att.expiryDate)) && (
+                            <option value="CUSTOM_EXISTING">{VALIDITY_PERIOD_LABELS['CUSTOM_EXISTING']}</option>
+                          )}
+                        </select>
+                        {editMetaForm.validityPeriod !== 'NONE' && editMetaForm.validityPeriod !== 'CUSTOM_EXISTING' && (
+                          <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                            New expiry date will be calculated automatically from today.
+                          </p>
+                        )}
+                      </div>
+                      {/* CUSTOM_EXISTING: show expiry date input for legacy Set Validity */}
+                      {editMetaForm.validityPeriod === 'CUSTOM_EXISTING' && (
+                        <div className="pl-4">
+                          <label className="mb-0.5 block text-[10px] font-medium" style={{ color: 'var(--text-secondary)' }}>Expiry Date *</label>
+                          <input type="date" value={editMetaForm.customExpiryDate}
+                            onChange={(e) => setEditMetaForm((f) => ({ ...f, customExpiryDate: e.target.value }))}
+                            className="w-full rounded-md border px-2 py-1 text-xs"
+                            style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }} />
+                        </div>
+                      )}
+                      {/* Reminder options — shown when expiry is tracked */}
+                      {editMetaForm.validityPeriod !== 'NONE' && (
+                        <div className="pl-4">
+                          <label className="mb-0.5 block text-[10px] font-medium" style={{ color: 'var(--text-secondary)' }}>Remind Before Expiry</label>
+                          {!editMetaForm.reminderChanged && ![7, 14].includes(editMetaForm.reminderDays) && (
+                            <p className="text-[10px] mb-1.5" style={{ color: 'var(--text-muted)' }}>
+                              This file uses an older reminder setting. It will remain unchanged unless you select 7 or 14 days.
+                            </p>
+                          )}
+                          <div className="flex flex-col gap-1.5 mt-1">
                             {!editMetaForm.reminderChanged && ![7, 14].includes(editMetaForm.reminderDays) && (
-                              <p className="text-[10px] mb-1.5" style={{ color: 'var(--text-muted)' }}>
-                                This file uses an older reminder setting. It will remain unchanged unless you select 7 or 14 days.
-                              </p>
+                              <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+                                <input type="radio" name="editReminder" checked={true} onChange={() => {}} className="accent-blue-600" readOnly />
+                                Keep current ({editMetaForm.reminderDays} days before)
+                              </label>
                             )}
-                            <div className="flex flex-col gap-1.5 mt-1">
-                              {/* "Keep current" option — shown only for legacy values and when not yet changed */}
-                              {!editMetaForm.reminderChanged && ![7, 14].includes(editMetaForm.reminderDays) && (
-                                <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-                                  <input
-                                    type="radio"
-                                    name="editReminder"
-                                    checked={true}
-                                    onChange={() => {}}
-                                    className="accent-blue-600"
-                                    readOnly
-                                  />
-                                  Keep current ({editMetaForm.reminderDays} days before)
-                                </label>
-                              )}
-                              {REMINDER_OPTIONS.map((o) => (
-                                <label key={o.value} className="flex items-center gap-1.5 cursor-pointer text-xs" style={{ color: 'var(--text-secondary)' }}>
-                                  <input
-                                    type="radio"
-                                    name="editReminder"
-                                    value={o.value}
-                                    checked={editMetaForm.reminderChanged && editMetaForm.reminderDays === o.value}
-                                    onChange={() => setEditMetaForm((f) => ({ ...f, reminderDays: o.value, reminderChanged: true }))}
-                                    className="accent-blue-600"
-                                  />
-                                  {o.label}
-                                </label>
-                              ))}
-                            </div>
+                            {REMINDER_OPTIONS.map((o) => (
+                              <label key={o.value} className="flex items-center gap-1.5 cursor-pointer text-xs" style={{ color: 'var(--text-secondary)' }}>
+                                <input
+                                  type="radio"
+                                  name="editReminder"
+                                  value={o.value}
+                                  checked={editMetaForm.reminderChanged && editMetaForm.reminderDays === o.value}
+                                  onChange={() => setEditMetaForm((f) => ({ ...f, reminderDays: o.value, reminderChanged: true }))}
+                                  className="accent-blue-600"
+                                />
+                                {o.label}
+                              </label>
+                            ))}
                           </div>
                         </div>
                       )}

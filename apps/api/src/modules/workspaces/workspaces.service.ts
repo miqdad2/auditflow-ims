@@ -781,15 +781,15 @@ export class WorkspacesService {
       // Operational member count: MEMBER | MANAGER | OWNER (excludes VIEWER)
       operationalMemberRows,
     ] = await Promise.all([
-      // ── Existing summary queries ───────────────────────────────────────────
+      // ── Existing summary queries (APPROVED tasks only — Unit 63.1) ───────────
       this.prisma.task.groupBy({
         by: ['workspaceId'],
-        where: { workspaceId: { in: workspaceIds }, status: 'COMPLETED' },
+        where: { workspaceId: { in: workspaceIds }, status: 'COMPLETED', approvalStatus: 'APPROVED' },
         _count: { id: true },
       }),
       this.prisma.task.groupBy({
         by: ['workspaceId'],
-        where: { workspaceId: { in: workspaceIds }, status: { notIn: ['COMPLETED', 'CANCELLED'] } },
+        where: { workspaceId: { in: workspaceIds }, status: { notIn: ['COMPLETED', 'CANCELLED'] }, approvalStatus: 'APPROVED' },
         _count: { id: true },
       }),
       this.prisma.task.groupBy({
@@ -798,6 +798,7 @@ export class WorkspacesService {
           workspaceId: { in: workspaceIds },
           dueDate: { lt: now },
           status: { notIn: ['COMPLETED', 'CANCELLED'] },
+          approvalStatus: 'APPROVED',
         },
         _count: { id: true },
       }),
@@ -842,6 +843,7 @@ export class WorkspacesService {
           isReference: true,
           assigneeId: true,
           dueDate: true,
+          approvalStatus: true,
         },
       }),
       // ── NCR detail rows (for status engine) ───────────────────────────────
@@ -966,9 +968,11 @@ export class WorkspacesService {
       const readinessPercent = checklist.total > 0
         ? Math.round((checklist.approved / checklist.total) * 100) : 0;
 
-      // Task metrics
+      // Task metrics — Unit 63.1: only APPROVED tasks enter operational counts
       const wsTasks = taskByWs.get(workspace.id) ?? [];
-      const nonRefTasks = wsTasks.filter((t) => !t.isReference);
+      // pendingApprovalTasks is informational only; not included in any operational metric
+      const pendingApprovalTasks = wsTasks.filter((t) => t.approvalStatus === 'PENDING').length;
+      const nonRefTasks = wsTasks.filter((t) => !t.isReference && t.approvalStatus === 'APPROVED');
       const activeTasks = nonRefTasks.filter((t) => !['COMPLETED', 'CANCELLED'].includes(t.status));
 
       const inProgressTasks     = activeTasks.filter((t) => t.status === 'IN_PROGRESS').length;
@@ -1029,6 +1033,7 @@ export class WorkspacesService {
         issuesWaitingVerification,
         expiredFiles,
         expiringFiles,
+        pendingApprovalTasks,
       });
 
       return {

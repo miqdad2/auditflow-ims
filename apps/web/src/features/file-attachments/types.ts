@@ -1,3 +1,28 @@
+export type DocumentValidityPeriod =
+  | 'NONE'
+  | 'ONE_MONTH'
+  | 'THREE_MONTHS'
+  | 'SIX_MONTHS'
+  | 'ONE_YEAR'
+  | 'CUSTOM_EXISTING';
+
+export const VALIDITY_PERIOD_LABELS: Record<DocumentValidityPeriod, string> = {
+  NONE:            'No Expiry',
+  ONE_MONTH:       '1 Month',
+  THREE_MONTHS:    '3 Months',
+  SIX_MONTHS:      '6 Months',
+  ONE_YEAR:        '1 Year',
+  CUSTOM_EXISTING: 'Custom (Legacy)',
+};
+
+export const NEW_UPLOAD_VALIDITY_OPTIONS: Array<{ value: DocumentValidityPeriod; label: string }> = [
+  { value: 'NONE',         label: 'No Expiry' },
+  { value: 'ONE_MONTH',    label: '1 Month' },
+  { value: 'THREE_MONTHS', label: '3 Months' },
+  { value: 'SIX_MONTHS',   label: '6 Months' },
+  { value: 'ONE_YEAR',     label: '1 Year' },
+];
+
 export interface FileAttachment {
   id: string;
   originalFileName: string;
@@ -10,13 +35,15 @@ export interface FileAttachment {
   createdAt: string;
   uploadedBy: { id: string; fullName: string };
   // Expiry tracking
-  displayName?:   string | null;
-  issueDate?:     string | null;
-  expiryDate?:    string | null;
-  reminderDays?:  number | null;
-  notes?:         string | null;
-  isSuperseded?:  boolean;
-  renewedFromId?: string | null;
+  displayName?:       string | null;
+  issueDate?:         string | null;
+  expiryDate?:        string | null;
+  reminderDays?:      number | null;
+  notes?:             string | null;
+  isSuperseded?:      boolean;
+  renewedFromId?:     string | null;
+  validityPeriod?:    DocumentValidityPeriod | null;
+  validityStartDate?: string | null;
   /** Soft warning returned when the uploaded filename resembles a controlled document. */
   warning?: string;
 }
@@ -40,11 +67,11 @@ export function getExpiryStatus(att: FileAttachment): ExpiryStatusInfo {
   const now      = Date.now();
   const expiry   = new Date(att.expiryDate).getTime();
   const daysLeft = Math.ceil((expiry - now) / 86400000);
-  const window   = att.reminderDays ?? 30;
+  const window   = att.reminderDays ?? 14;
 
-  if (daysLeft < 0)           return { status: 'EXPIRED',       label: 'Expired',        color: 'var(--state-error)',   bg: 'var(--state-error-soft)',   daysLeft };
-  if (daysLeft <= window)     return { status: 'EXPIRING_SOON', label: 'Expiring Soon',  color: 'var(--state-warning)', bg: 'var(--state-warning-soft)', daysLeft };
-  return                             { status: 'VALID',         label: 'Valid',          color: 'var(--state-success)', bg: 'var(--state-success-soft)', daysLeft };
+  if (daysLeft < 0)       return { status: 'EXPIRED',       label: 'Expired',       color: 'var(--state-error)',   bg: 'var(--state-error-soft)',   daysLeft };
+  if (daysLeft <= window) return { status: 'EXPIRING_SOON', label: 'Expiring Soon', color: 'var(--state-warning)', bg: 'var(--state-warning-soft)', daysLeft };
+  return                         { status: 'VALID',         label: 'Valid',         color: 'var(--state-success)', bg: 'var(--state-success-soft)', daysLeft };
 }
 
 export function formatFileSize(bytes: number): string {

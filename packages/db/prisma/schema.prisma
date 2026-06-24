@@ -94,33 +94,33 @@ model User {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  department       Department?       @relation(fields: [departmentId], references: [id])
-  userRoles        UserRole[]
-  auditLogs        AuditLog[]
-  ownedWorkspaces  Workspace[]       @relation("WorkspaceOwner")
-  createdTaskLists TaskList[]        @relation("TaskListCreator")
-  createdPages     Page[]            @relation("PageCreator")
-  assignedTasks    Task[]            @relation("TaskAssignee")
-  createdTasks     Task[]            @relation("TaskCreator")
-  taskComments     TaskComment[]     @relation("CommentAuthor")
-  activityEvents   ActivityEvent[]   @relation("ActivityActor")
-  notifications    Notification[]    @relation("NotificationRecipient")
-  ownedDocuments       Document[]       @relation("DocumentOwner")
-  createdDocuments     Document[]       @relation("DocumentCreator")
-  uploadedVersions     DocumentVersion[]@relation("VersionUploader")
-  uploadedAttachments  FileAttachment[] @relation("FileAttachmentUploader")
-  createdChecklists         AuditChecklist[]     @relation("ChecklistCreator")
-  responsibleChecklistItems AuditChecklistItem[] @relation("ItemResponsibleUser")
-  reviewerChecklistItems    AuditChecklistItem[] @relation("ItemReviewer")
-  createdChecklistItems     AuditChecklistItem[] @relation("ItemCreator")
-  submittedEvidence         ChecklistEvidence[]  @relation("EvidenceSubmitter")
-  reviewedEvidence          ChecklistEvidence[]  @relation("EvidenceReviewer")
-  raisedNcrCapas            NcrCapa[]            @relation("NcrRaisedBy")
-  assignedNcrCapas          NcrCapa[]            @relation("NcrAssignedTo")
-  verifiedNcrCapas          NcrCapa[]            @relation("NcrVerifiedBy")
-  closedNcrCapas            NcrCapa[]            @relation("NcrClosedBy")
-  ncrCapaComments           NcrCapaComment[]     @relation("NcrCapaCommentAuthor")
-  workspaceMemberships      WorkspaceMember[]    @relation("WorkspaceMemberships")
+  department                Department?           @relation(fields: [departmentId], references: [id])
+  userRoles                 UserRole[]
+  auditLogs                 AuditLog[]
+  ownedWorkspaces           Workspace[]           @relation("WorkspaceOwner")
+  createdTaskLists          TaskList[]            @relation("TaskListCreator")
+  createdPages              Page[]                @relation("PageCreator")
+  assignedTasks             Task[]                @relation("TaskAssignee")
+  createdTasks              Task[]                @relation("TaskCreator")
+  taskComments              TaskComment[]         @relation("CommentAuthor")
+  activityEvents            ActivityEvent[]       @relation("ActivityActor")
+  notifications             Notification[]        @relation("NotificationRecipient")
+  ownedDocuments            Document[]            @relation("DocumentOwner")
+  createdDocuments          Document[]            @relation("DocumentCreator")
+  uploadedVersions          DocumentVersion[]     @relation("VersionUploader")
+  uploadedAttachments       FileAttachment[]      @relation("FileAttachmentUploader")
+  createdChecklists         AuditChecklist[]      @relation("ChecklistCreator")
+  responsibleChecklistItems AuditChecklistItem[]  @relation("ItemResponsibleUser")
+  reviewerChecklistItems    AuditChecklistItem[]  @relation("ItemReviewer")
+  createdChecklistItems     AuditChecklistItem[]  @relation("ItemCreator")
+  submittedEvidence         ChecklistEvidence[]   @relation("EvidenceSubmitter")
+  reviewedEvidence          ChecklistEvidence[]   @relation("EvidenceReviewer")
+  raisedNcrCapas            NcrCapa[]             @relation("NcrRaisedBy")
+  assignedNcrCapas          NcrCapa[]             @relation("NcrAssignedTo")
+  verifiedNcrCapas          NcrCapa[]             @relation("NcrVerifiedBy")
+  closedNcrCapas            NcrCapa[]             @relation("NcrClosedBy")
+  ncrCapaComments           NcrCapaComment[]      @relation("NcrCapaCommentAuthor")
+  workspaceMemberships      WorkspaceMember[]     @relation("WorkspaceMemberships")
   pinnedItems               WorkspacePinnedItem[] @relation("PinnedByUser")
   linkedRecords             LinkedRecord[]        @relation("LinkedRecordCreator")
 
@@ -179,16 +179,16 @@ model Workspace {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  owner        User               @relation("WorkspaceOwner", fields: [ownerId], references: [id])
-  department   Department?        @relation("WorkspaceDepartment", fields: [departmentId], references: [id])
-  taskLists    TaskList[]
-  tasks        Task[]
-  documents    Document[]
-  pages        Page[]
-  checklists   AuditChecklist[]
-  ncrCapas     NcrCapa[]
-  members      WorkspaceMember[]
-  pinnedItems  WorkspacePinnedItem[]
+  owner       User                  @relation("WorkspaceOwner", fields: [ownerId], references: [id])
+  department  Department?           @relation("WorkspaceDepartment", fields: [departmentId], references: [id])
+  taskLists   TaskList[]
+  tasks       Task[]
+  documents   Document[]
+  pages       Page[]
+  checklists  AuditChecklist[]
+  ncrCapas    NcrCapa[]
+  members     WorkspaceMember[]
+  pinnedItems WorkspacePinnedItem[]
 
   @@index([ownerId])
   @@index([status])
@@ -244,7 +244,7 @@ model Task {
   // Reference items are excluded from operational KPIs, Action Center alerts,
   // and overdue notifications. Priority remains a valid real value (defaulting
   // to LOW); isReference is the authoritative reference marker.
-  isReference        Boolean   @default(false)
+  isReference Boolean @default(false)
 
   // ── Recurrence fields ─────────────────────────────────────────────────────
   // NONE | MONTHLY | QUARTERLY | SEMIANNUAL | ANNUAL
@@ -255,6 +255,19 @@ model Task {
   recurrenceSeriesId String?
   // The task ID that spawned this occurrence (used for idempotency check)
   recurrenceParentId String?
+
+  // ── Approval workflow fields (Unit 63.1) ─────────────────────────────────
+  // PENDING   — created by MEMBER, awaiting reviewer decision (private)
+  // APPROVED  — official workspace task (default for all existing + elevated-created tasks)
+  // RETURNED  — reviewer returned request for correction; creator must resubmit
+  // REJECTED  — reviewer rejected; task is archived/read-only for creator
+  // Note: work status (Task.status) remains separate from approval status.
+  // Pending/returned/rejected tasks are excluded from all operational metrics.
+  approvalStatus       String    @default("APPROVED") @map("approval_status") // PENDING | APPROVED | RETURNED | REJECTED
+  approvalNote         String?   @map("approval_note") // business reason provided by creator at creation
+  approvalReviewNote   String?   @map("approval_review_note") // reviewer's feedback on approval/return/rejection
+  approvalReviewedAt   DateTime? @map("approval_reviewed_at") // timestamp of last reviewer decision
+  approvalReviewedById String?   @map("approval_reviewed_by_id") // reviewer user ID
 
   workspace  Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   taskList   TaskList      @relation(fields: [taskListId], references: [id], onDelete: Cascade)
@@ -272,6 +285,7 @@ model Task {
   @@index([dueDate])
   @@index([isReference])
   @@index([recurrenceSeriesId])
+  @@index([approvalStatus])
   @@map("tasks")
 }
 
@@ -301,7 +315,7 @@ model ActivityEvent {
   actorId    String
   action     String
   summary    String
-  metadata   Json?    // Status changes: { previousStatus, newStatus, reason, source, isOverride }
+  metadata   Json? // Status changes: { previousStatus, newStatus, reason, source, isOverride }
   createdAt  DateTime @default(now())
 
   actor User @relation("ActivityActor", fields: [actorId], references: [id])
@@ -317,7 +331,7 @@ model ActivityEvent {
 // No approval workflow. Files live on disk; only metadata stored here.
 
 model FileAttachment {
-  id               String    @id @default(cuid())
+  id               String   @id @default(cuid())
   originalFileName String
   storedFileName   String
   storagePath      String
@@ -327,18 +341,20 @@ model FileAttachment {
   uploadedById     String
   entityType       String
   entityId         String
-  createdAt        DateTime  @default(now())
+  createdAt        DateTime @default(now())
 
   // Expiry tracking fields (primarily used for TASK attachments)
-  displayName    String?   // Optional friendly display name
-  issueDate      DateTime? // When the document was issued
-  expiryDate     DateTime? // When the document expires
-  reminderDays   Int?      // Days before expiry to notify (e.g. 7 / 15 / 30 / 60 / 90)
-  notes          String?   // Optional notes about this file
+  displayName       String? // Optional friendly display name
+  issueDate         DateTime? // When the document was issued
+  expiryDate        DateTime? // Calculated expiry — written by backend from validityPeriod or CUSTOM_EXISTING
+  reminderDays      Int? // Days before expiry to notify (7 or 14; legacy rows may store 15/30/60/90)
+  notes             String? // Optional notes about this file
+  validityPeriod    String?   @map("validity_period") // NONE | ONE_MONTH | THREE_MONTHS | SIX_MONTHS | ONE_YEAR | CUSTOM_EXISTING
+  validityStartDate DateTime? @map("validity_start_date") // Date from which validity period is calculated (= upload date for new files)
 
   // Renewal chain
-  isSuperseded   Boolean   @default(false) // True when replaced by a newer upload
-  renewedFromId  String?   // Points to the older file this renews
+  isSuperseded  Boolean @default(false) // True when replaced by a newer upload
+  renewedFromId String? // Points to the older file this renews
 
   uploadedBy  User             @relation("FileAttachmentUploader", fields: [uploadedById], references: [id])
   renewedFrom FileAttachment?  @relation("AttachmentRenewals", fields: [renewedFromId], references: [id])
@@ -441,13 +457,13 @@ model Notification {
   id          String    @id @default(cuid())
   recipientId String
   category    String
-  severity    String    @default("INFO")  // INFO | WARNING | ERROR | CRITICAL
+  severity    String    @default("INFO") // INFO | WARNING | ERROR | CRITICAL
   title       String
   message     String
   entityType  String?
   entityId    String?
-  workspaceId String?   // cached for fast client routing, no FK constraint
-  deepLink    String?   // pre-computed client-side route
+  workspaceId String? // cached for fast client routing, no FK constraint
+  deepLink    String? // pre-computed client-side route
   readAt      DateTime?
   createdAt   DateTime  @default(now())
 
@@ -547,39 +563,39 @@ model ChecklistEvidence {
 // File attachments via polymorphic FileAttachment (entityType = 'NCR_CAPA').
 
 model NcrCapa {
-  id                String    @id @default(cuid())
-  ncrNumber         String?   @unique
-  title             String
-  description       String?
-  type              String    @default("NCR")        // NCR | CAPA | OBSERVATION
-  severity          String    @default("MINOR")      // Severity enum
-  status            String    @default("OPEN")       // NcrCapaStatus enum
+  id          String  @id @default(cuid())
+  ncrNumber   String? @unique
+  title       String
+  description String?
+  type        String  @default("NCR") // NCR | CAPA | OBSERVATION
+  severity    String  @default("MINOR") // Severity enum
+  status      String  @default("OPEN") // NcrCapaStatus enum
 
   // ISO context
-  isoClause         String?
-  workspaceId       String?
-  departmentId      String?
-  checklistItemId   String?
+  isoClause       String?
+  workspaceId     String?
+  departmentId    String?
+  checklistItemId String?
 
   // People
-  raisedById        String
-  assignedToId      String?
-  verifiedById      String?
-  closedById        String?
+  raisedById   String
+  assignedToId String?
+  verifiedById String?
+  closedById   String?
 
   // Root cause analysis and corrective/preventive actions
-  rootCause         String?
-  correctiveAction  String?
-  preventiveAction  String?
+  rootCause        String?
+  correctiveAction String?
+  preventiveAction String?
 
   // Dates
-  dueDate           DateTime?
-  verifiedAt        DateTime?
-  closedAt          DateTime?
-  rejectionReason   String?
+  dueDate         DateTime?
+  verifiedAt      DateTime?
+  closedAt        DateTime?
+  rejectionReason String?
 
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   workspace     Workspace?          @relation(fields: [workspaceId], references: [id])
   department    Department?         @relation(fields: [departmentId], references: [id])
@@ -640,7 +656,7 @@ model NcrCapaComment {
 model WorkspacePinnedItem {
   id          String   @id @default(cuid())
   workspaceId String
-  entityType  String   // PAGE (extensible to TASK, DOCUMENT in future)
+  entityType  String // PAGE (extensible to TASK, DOCUMENT in future)
   entityId    String
   pinnedById  String
   createdAt   DateTime @default(now())
@@ -658,7 +674,7 @@ model WorkspacePinnedItem {
 
 model LinkedRecord {
   id          String   @id @default(cuid())
-  sourceType  String   // TASK | PAGE | DOCUMENT | CHECKLIST_ITEM | NCR_CAPA
+  sourceType  String // TASK | PAGE | DOCUMENT | CHECKLIST_ITEM | NCR_CAPA
   sourceId    String
   targetType  String
   targetId    String
@@ -677,8 +693,8 @@ model LinkedRecord {
 
 model SystemErrorLog {
   id         String    @id @default(cuid())
-  source     String    // API | FRONTEND | REALTIME | STORAGE | DATABASE
-  severity   String    // INFO | WARNING | ERROR | CRITICAL
+  source     String // API | FRONTEND | REALTIME | STORAGE | DATABASE
+  severity   String // INFO | WARNING | ERROR | CRITICAL
   message    String
   stack      String?
   path       String?

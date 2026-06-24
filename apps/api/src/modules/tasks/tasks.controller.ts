@@ -11,6 +11,7 @@ import { UpdateTaskDto } from './dto/update-task.dto';
 import { ChangeStatusDto } from './dto/change-status.dto';
 import { CreateCommentDto } from './dto/create-comment.dto';
 import { UpdateCommentDto } from './dto/update-comment.dto';
+import { TaskApprovalReviewDto, TaskApprovalReturnDto } from './dto/task-approval.dto';
 import { TASK_STATUS_TRANSITIONS } from '@auditflow/shared';
 
 @Controller('tasks')
@@ -44,8 +45,12 @@ export class TasksController {
 
   @Get(':id')
   @RequirePermissions('project.read')
-  findOne(@Param('id') id: string) {
-    return this.svc.findOne(id);
+  findOne(
+    @Param('id') id: string,
+    @CurrentUser() user: Record<string, unknown>,
+  ) {
+    const roles = extractUserRoles(user);
+    return this.svc.findOne(id, user.id as string, roles);
   }
 
   @Post()
@@ -121,6 +126,69 @@ export class TasksController {
     @CurrentUser() user: Record<string, unknown>,
   ) {
     return this.svc.deleteTask(id, user);
+  }
+
+  // ── Task Approval Workflow Endpoints (Unit 63.1) ──────────────────────────
+  // Reviewers: workspace Manager/Owner or elevated roles.
+  // Creator: resubmit only (RETURNED → PENDING).
+
+  /** Approve a pending task — it becomes an official workspace task. */
+  @Post(':id/approval/approve')
+  @RequirePermissions('project.read')
+  approveTask(
+    @Param('id') id: string,
+    @Body() dto: TaskApprovalReviewDto,
+    @CurrentUser() user: Record<string, unknown>,
+  ) {
+    const roles = extractUserRoles(user);
+    return this.svc.approveTask(id, dto.reviewNote, user.id as string, roles);
+  }
+
+  /** Approve and simultaneously mark the task complete (work already submitted). */
+  @Post(':id/approval/approve-complete')
+  @RequirePermissions('project.read')
+  approveAndCompleteTask(
+    @Param('id') id: string,
+    @Body() dto: TaskApprovalReviewDto,
+    @CurrentUser() user: Record<string, unknown>,
+  ) {
+    const roles = extractUserRoles(user);
+    return this.svc.approveAndCompleteTask(id, dto.reviewNote, user.id as string, roles);
+  }
+
+  /** Return a task request for creator correction — reason required. */
+  @Post(':id/approval/return')
+  @RequirePermissions('project.read')
+  returnTask(
+    @Param('id') id: string,
+    @Body() dto: TaskApprovalReturnDto,
+    @CurrentUser() user: Record<string, unknown>,
+  ) {
+    const roles = extractUserRoles(user);
+    return this.svc.returnTask(id, dto.reviewNote, user.id as string, roles);
+  }
+
+  /** Reject a task request entirely — reason required. */
+  @Post(':id/approval/reject')
+  @RequirePermissions('project.read')
+  rejectTask(
+    @Param('id') id: string,
+    @Body() dto: TaskApprovalReturnDto,
+    @CurrentUser() user: Record<string, unknown>,
+  ) {
+    const roles = extractUserRoles(user);
+    return this.svc.rejectTask(id, dto.reviewNote, user.id as string, roles);
+  }
+
+  /** Creator resubmits a RETURNED task — goes back to PENDING. */
+  @Post(':id/approval/resubmit')
+  @RequirePermissions('project.read')
+  resubmitTask(
+    @Param('id') id: string,
+    @CurrentUser() user: Record<string, unknown>,
+  ) {
+    const roles = extractUserRoles(user);
+    return this.svc.resubmitTask(id, user.id as string, roles);
   }
 
   // ── Recurrence reconciliation (elevated-only) ─────────────────────────────

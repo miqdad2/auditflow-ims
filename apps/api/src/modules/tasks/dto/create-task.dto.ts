@@ -2,6 +2,7 @@ import {
   IsString, IsNotEmpty, IsOptional, MaxLength,
   IsIn, IsDateString, IsBoolean,
 } from 'class-validator';
+
 import { TaskStatus, Priority } from '@auditflow/shared';
 
 export const RECURRENCE_INTERVALS = ['NONE', 'MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL'] as const;
@@ -54,4 +55,11 @@ export class CreateTaskDto {
   @IsDateString()
   @IsOptional()
   recurrenceEndDate?: string;
+
+  // Business reason — required for MEMBER-created tasks (enforced in service, not here).
+  // Stored as approvalNote on the Task record.
+  @IsString()
+  @IsOptional()
+  @MaxLength(1000)
+  approvalNote?: string;
 }

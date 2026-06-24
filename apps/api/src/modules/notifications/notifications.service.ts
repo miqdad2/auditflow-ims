@@ -14,8 +14,13 @@ const CATEGORY_SEVERITY: Record<string, 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL
   TASK_COMPLETED:          'INFO',
   TASK_CANCELLED:          'WARNING',
   TASK_REOPENED:           'INFO',
-  TASK_DUE_SOON:           'WARNING',
-  EVIDENCE_SUBMITTED:      'INFO',
+  TASK_DUE_SOON:              'WARNING',
+  // Approval workflow (Unit 63.1)
+  TASK_PENDING_APPROVAL:      'WARNING', // reviewers: new task awaiting decision
+  TASK_APPROVAL_APPROVED:     'INFO',    // creator: task approved
+  TASK_APPROVAL_RETURNED:     'WARNING', // creator: task returned for correction
+  TASK_APPROVAL_REJECTED:     'WARNING', // creator: task rejected
+  EVIDENCE_SUBMITTED:         'INFO',
   EVIDENCE_APPROVED:       'INFO',
   EVIDENCE_REJECTED:       'WARNING',
   DOCUMENT_APPROVED:       'INFO',
