@@ -109,6 +109,8 @@ Update this file after every meaningful implementation change.
 
 - Unit 63.7.2 — Rename Report Title to Operations & Compliance Report: two occurrences in `apps/web/src/app/(app)/reports/page.tsx` — line 313 (visible h1) and line 926 (hidden print-only header); both changed from `Business Operations & Compliance Report` to `Operations & Compliance Report`; dynamic dates, reporting period, subtitle, and all report data and filters unchanged; no occurrences in source files besides these two (progress-tracker.md entries are historical records, left unchanged); pnpm --filter web build ✅ (21 routes clean); commit cd1defb ✅ Complete
 
+- Unit 63.7.3 — Remove Duplicate Inline Add Task Row: Part 1 audit confirmed three-piece removal — (1) `inlineTitle` + `addingInline` state variables; (2) `handleInlineAddTask()` function which called `POST /tasks` directly bypassing `CreateTaskModal`, approval flow, and business-reason validation; (3) `<tfoot>` block (lines 2799–2823) rendering `+ Add a task…` input with Enter-key submission, shown only when `canManage` — so only for Managers/Owners/Elevated users, not for Members; no role visibility issue. Empty-state "Add First Task" button (canAddTask gate, lines 2481–2487) was independent and preserved unchanged. Icon imports (`Plus`, `Loader2`, `X`) all used extensively elsewhere — not removed. `canManage` variable itself used in other places — not removed. Grep confirmed zero remaining references to `inlineTitle`, `addingInline`, `handleInlineAddTask`, or "Add a task" after edits. pnpm --filter web build ✅ (21 routes clean); commit 294edff ✅ Complete
+
 ## Current Goal
 
 Build a production-ready 3-day MVP for **RECAFCO AuditFlow IMS**.
