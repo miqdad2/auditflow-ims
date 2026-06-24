@@ -1,8 +1,55 @@
 # Production Pre-Flight Checklist — AuditFlow IMS
 
-Release: auditflow-ims-2026-06-22-r1  
-Commit: 34d1324db58069e16fa3bcad363c9a78e1d47095 (plus uncommitted working tree changes)  
-Date: 2026-06-22
+Release: auditflow-ims-2026-06-24-r2  
+Commit: ddb297d (HEAD — all Unit 63.x through 64.3 changes committed)
+Date: 2026-06-24
+
+## Unit 64.3 — Readiness Verification Summary (2026-06-24)
+
+| Check | Result |
+|---|---|
+| Working tree | ✅ CLEAN — all changes committed |
+| API test suite | ✅ 413 total, 403 pass, 10 skip, 0 fail |
+| API build | ✅ EXIT:0 |
+| Web build (dev mode) | ✅ EXIT:0, 21 routes |
+| Web build (production env) | ✅ EXIT:0 (with NEXT_PUBLIC_API_URL=/api via shell) |
+| Prisma migration status | ✅ 17 migrations, all applied, DB up to date |
+| Prisma generate | ✅ Clean |
+| Git diff --check | ✅ No whitespace errors |
+| Port-4000 in bundle (source) | ✅ No hardcoded port in component source |
+| Port-4000 in bundle (env values) | ⚠️ Present from .env.local (expected — .env.local overrides at build time) |
+| Caddy locally installed | ❌ Not installed locally — proxy test NOT completed |
+| Two-browser realtime test | ❌ NOT completed — requires running instances |
+| Disconnect/reconnect test | ❌ NOT completed — requires running instances |
+| Event dedup runtime test | ❌ NOT completed — requires running instances |
+
+## Critical pre-deployment action required
+
+Before running `pnpm --filter web build` on the production server:
+
+1. **The production server does NOT have a `.env.local` file** (only `.env`).
+2. Update `apps/web/.env` on the server with production values:
+   ```
+   NEXT_PUBLIC_API_URL=/api
+   NEXT_PUBLIC_SOCKET_URL=
+   ```
+3. Update `apps/api/.env` on the server:
+   ```
+   CORS_ORIGIN=http://<server-ip>
+   ```
+4. This ensures the production bundle does NOT contain localhost:4000 values.
+
+## Port-4000 bundle audit explanation
+
+The production-style build on the developer machine produced two files containing `localhost:4000`:
+- **Admin system health page** (`page.tsx` line 28): Displays the configured API URL. With `NEXT_PUBLIC_API_URL=/api`, this would show `/api`.
+- **Socket provider**: `NEXT_PUBLIC_SOCKET_URL=http://localhost:4000` was baked in from `.env.local` which overrides shell env at Next.js build time.
+
+**Neither is a hardcoded string in source code.** Both are correctly driven by environment variables. On the production server where `.env.local` does not exist, the production values from `.env` will be used correctly.
+
+---
+
+## Previous Release Entry (2026-06-22-r1)
 
 ---
 
