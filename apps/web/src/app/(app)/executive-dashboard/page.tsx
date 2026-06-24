@@ -100,8 +100,7 @@ interface ExecutiveData {
   generatedAt: string;
 }
 
-// ─── Elevated roles that can access executive endpoint ────────────────────────
-const ELEVATED = ['SUPER_ADMIN', 'IT_ADMIN', 'ISO_MANAGER', 'QHSE_USER', 'SUPER_USER'];
+// No elevated-role check — access is controlled by dashboardExperience === EXECUTIVE.
 
 // ─── Helper: health color ─────────────────────────────────────────────────────
 function healthColor(health: string): { color: string; bg: string } {
@@ -202,8 +201,7 @@ export default function ExecutiveDashboardPage() {
   const [lastUpdated, setLastUpdated] = useState<string>('');
   const fetchingRef = useRef(false);
 
-  // ─── Access guard ─────────────────────────────────────────────────────────
-  const isElevated = user?.roles?.some((r) => ELEVATED.includes(r)) ?? false;
+  // ─── Access guard — dashboardExperience only, no role requirement ────────
   const isExecutive = user?.dashboardExperience === 'EXECUTIVE';
 
   useEffect(() => {
@@ -252,14 +250,14 @@ export default function ExecutiveDashboardPage() {
     );
   }
 
-  // ─── Access denied ────────────────────────────────────────────────────────
-  if (error === 'access_denied' || (!isLoading && user && !isElevated)) {
+  // ─── Access denied — Standard users navigating here directly ────────────
+  if (error === 'access_denied' || (!isLoading && user && !isExecutive)) {
     return (
       <div className="flex h-64 flex-col items-center justify-center gap-3">
         <Lock className="h-8 w-8" style={{ color: 'var(--state-error)' }} />
         <p className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>Access Denied</p>
         <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-          Executive Dashboard requires elevated access.
+          Executive Dashboard is not enabled for this account.
         </p>
         <Link href="/dashboard"
           className="mt-2 rounded-lg px-4 py-2 text-sm font-medium text-white"
@@ -289,8 +287,29 @@ export default function ExecutiveDashboardPage() {
 
   const { summary, attentionItems, organizationHealth, pendingDecisions, trends, departmentPerformance, significantActivity } = data;
 
+  // ─── Zero-workspace empty state ───────────────────────────────────────────
+  // A user with Executive dashboard but no workspace memberships sees a safe empty state.
+  // Summary counts will all be 0, so show a clear message instead of misleading zeros.
+  const hasNoWorkspaceAccess = summary.activeWorkspaces === 0 && organizationHealth.length === 0;
+
   return (
     <div className="flex flex-col gap-6 pb-12">
+
+      {/* ── Zero-workspace notice ────────────────────────────────────────────── */}
+      {hasNoWorkspaceAccess && (
+        <div className="rounded-xl border px-5 py-4 flex items-start gap-3"
+          style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}>
+          <AlertCircle className="h-5 w-5 mt-0.5 shrink-0" style={{ color: 'var(--text-muted)' }} />
+          <div>
+            <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+              No executive data is available for your current workspace access.
+            </p>
+            <p className="mt-0.5 text-sm" style={{ color: 'var(--text-muted)' }}>
+              Contact an administrator if additional workspace visibility is required.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* ── Header ──────────────────────────────────────────────────────────── */}
       <div className="flex items-start justify-between gap-4">

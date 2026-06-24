@@ -177,6 +177,7 @@ export function AppHeader({ title }: AppHeaderProps) {
 }
 
 function getHeaderTitle(pathname: string): string {
+  if (pathname.startsWith('/executive-dashboard')) return 'Executive Dashboard';
   if (pathname.startsWith('/workspaces')) return 'ISO Workspaces';
   if (pathname.startsWith('/tasks')) return 'Tasks';
   if (pathname.startsWith('/documents')) return 'Document Library';

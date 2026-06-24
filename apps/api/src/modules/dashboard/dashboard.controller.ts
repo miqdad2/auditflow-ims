@@ -8,9 +8,6 @@ import {
 } from '../../common/permissions.guard';
 import { DashboardService } from './dashboard.service';
 
-// Roles that may access the Executive Dashboard endpoint.
-const EXECUTIVE_ROLES = ['SUPER_ADMIN', 'IT_ADMIN', 'ISO_MANAGER', 'QHSE_USER', 'SUPER_USER'];
-
 @Controller('dashboard')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class DashboardController {
@@ -36,17 +33,20 @@ export class DashboardController {
   }
 
   /**
-   * Executive summary — one-page management overview (Unit 65).
-   * Requires elevated role (ELEVATED tier). Standard/dept users receive 403.
-   * dashboardExperience field controls the frontend landing page, not this endpoint access.
+   * Executive summary — one-page management overview (Unit 65.1).
+   * Access gate: dashboardExperience === EXECUTIVE, read from the DB-backed current user.
+   * Does NOT require elevated role — a Normal User with Executive dashboard can access this.
+   * All returned data is scoped to the user's accessible workspaces and permissions.
    */
   @Get('executive')
   @RequirePermissions('project.read')
   getExecutiveSummary(@CurrentUser() user: Record<string, unknown>) {
     const roles  = extractUserRoles(user);
     const deptId = (user.departmentId as string | null) ?? null;
-    if (!roles.some((r: string) => EXECUTIVE_ROLES.includes(r))) {
-      throw new ForbiddenException('Executive summary requires elevated access');
+    // Read dashboardExperience from the DB-backed user (JWT strategy loads full user row).
+    const dashboardExp = (user.dashboardExperience as string | undefined) ?? 'STANDARD';
+    if (dashboardExp !== 'EXECUTIVE') {
+      throw new ForbiddenException('Executive Dashboard is not enabled for this account.');
     }
     return this.svc.getExecutiveSummary(user.id as string, roles, deptId);
   }

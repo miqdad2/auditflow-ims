@@ -794,14 +794,42 @@ export class DashboardService {
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // Executive Dashboard Summary  (Unit 65)
-  // Backend-scoped. Requires ELEVATED tier. No cross-workspace leakage.
+  // Executive Dashboard Summary  (Unit 65 / 65.1)
+  // Access gate: dashboardExperience === EXECUTIVE (controller check, not role check).
+  // All queries are scoped to the user's accessible workspaces.
+  // Elevated users see all active workspaces; non-elevated users see only their memberships.
   // ─────────────────────────────────────────────────────────────────────────────
 
   async getExecutiveSummary(actorId: string, actorRoles: string[], actorDeptId: string | null) {
+    const tier = getAccessTier(actorRoles);
     const now  = new Date();
     const in30  = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
     const eod  = endOfDayKuwait(now);
+
+    // ─── Step 1: resolve accessible workspace IDs for non-elevated users ─────
+    // Elevated users: wsIdFilter = undefined → queries run globally (no ws restriction).
+    // Non-elevated users: wsIdFilter = { in: [...] } → all queries restricted to memberships.
+    let wsIdFilter: { in: string[] } | undefined;
+
+    if (tier !== 'ELEVATED') {
+      const memberRows = await this.prisma.workspaceMember.findMany({
+        where: { userId: actorId },
+        select: { workspaceId: true },
+      });
+      const ids = memberRows.map((m) => m.workspaceId);
+      wsIdFilter = { in: ids };
+    }
+
+    // Convenience: workspace-based where fragments
+    const taskWsScope     = wsIdFilter ? { workspaceId: wsIdFilter }                    : {};
+    const docWsScope      = wsIdFilter ? { workspaceId: wsIdFilter }                    : {};
+    const ncrWsScope      = wsIdFilter ? { workspaceId: wsIdFilter }                    : {};
+    const checklistWsScope = wsIdFilter
+      ? { checklist: { workspaceId: wsIdFilter } } as Record<string, unknown>
+      : {};
+    const wsListScope     = wsIdFilter ? { id: wsIdFilter, status: 'ACTIVE' as const }  : { status: 'ACTIVE' as const };
+    // Activity: non-elevated sees only their own audit events (no company-wide leakage)
+    const activityScope   = (tier !== 'ELEVATED') ? { actorId } : {};
 
     const [
       activeWorkspaceCount,
@@ -818,33 +846,35 @@ export class DashboardService {
       workspaces,
       recentSignificantActivity,
     ] = await Promise.all([
-      this.prisma.workspace.count({ where: { status: 'ACTIVE' } }),
+      // Count of accessible active workspaces
+      this.prisma.workspace.count({ where: wsListScope }),
 
       this.prisma.task.groupBy({
         by: ['status'],
-        where: { parentTaskId: null, isReference: false, approvalStatus: 'APPROVED' },
+        where: { ...taskWsScope, parentTaskId: null, isReference: false, approvalStatus: 'APPROVED' },
         _count: { id: true },
       }),
 
       this.prisma.task.count({
         where: {
+          ...taskWsScope,
           parentTaskId: null, isReference: false, approvalStatus: 'APPROVED',
           dueDate: { lt: eod },
           status: { notIn: ['COMPLETED', 'CANCELLED'] },
         },
       }),
 
-      this.prisma.document.groupBy({ by: ['status'], where: {}, _count: { id: true } }),
+      this.prisma.document.groupBy({ by: ['status'], where: docWsScope, _count: { id: true } }),
 
-      this.prisma.document.count({ where: { status: 'APPROVED', expiryDate: { lt: now } } }),
-      this.prisma.document.count({ where: { status: 'APPROVED', expiryDate: { gte: now, lte: in30 } } }),
+      this.prisma.document.count({ where: { ...docWsScope, status: 'APPROVED', expiryDate: { lt: now } } }),
+      this.prisma.document.count({ where: { ...docWsScope, status: 'APPROVED', expiryDate: { gte: now, lte: in30 } } }),
 
-      this.prisma.ncrCapa.groupBy({ by: ['status'], where: {}, _count: { id: true } }),
-      this.prisma.auditChecklistItem.groupBy({ by: ['status'], where: {}, _count: { id: true } }),
+      this.prisma.ncrCapa.groupBy({ by: ['status'], where: ncrWsScope, _count: { id: true } }),
+      this.prisma.auditChecklistItem.groupBy({ by: ['status'], where: checklistWsScope, _count: { id: true } }),
 
-      // Documents pending review (pending decisions)
+      // Documents pending review — scoped to accessible workspaces
       this.prisma.document.findMany({
-        where: { status: 'UNDER_REVIEW' },
+        where: { ...docWsScope, status: 'UNDER_REVIEW' },
         orderBy: { updatedAt: 'asc' },
         take: 20,
         select: {
@@ -855,9 +885,10 @@ export class DashboardService {
         },
       }),
 
-      // Critical/high overdue tasks for attention panel
+      // Critical/high overdue tasks — scoped to accessible workspaces
       this.prisma.task.findMany({
         where: {
+          ...taskWsScope,
           parentTaskId: null, isReference: false, approvalStatus: 'APPROVED',
           status: { notIn: ['COMPLETED', 'CANCELLED'] },
           dueDate: { lt: eod },
@@ -872,9 +903,10 @@ export class DashboardService {
         },
       }),
 
-      // Expired/expiring controlled documents
+      // Expired/expiring docs — scoped to accessible workspaces
       this.prisma.document.findMany({
         where: {
+          ...docWsScope,
           status: 'APPROVED',
           OR: [{ expiryDate: { lt: now } }, { expiryDate: { gte: now, lte: in30 } }],
         },
@@ -888,9 +920,9 @@ export class DashboardService {
         },
       }),
 
-      // Workspaces for org health table
+      // Workspaces for org health table — scoped to accessible
       this.prisma.workspace.findMany({
-        where: { status: 'ACTIVE' },
+        where: wsListScope,
         orderBy: { name: 'asc' },
         take: 50,
         select: {
@@ -899,9 +931,10 @@ export class DashboardService {
         },
       }),
 
-      // Recent significant audit log entries
+      // Significant activity — non-elevated sees own events only (no company-wide leakage)
       this.prisma.auditLog.findMany({
         where: {
+          ...activityScope,
           action: {
             in: [
               'APPROVED', 'REJECTED', 'ARCHIVED',
@@ -1117,19 +1150,21 @@ export class DashboardService {
       timestamp: log.createdAt.toISOString(),
     }));
 
-    // ─── Weekly trend (only when baseline exists) ─────────────────────────────
+    // ─── Weekly trend (only when baseline exists) — scoped to accessible workspaces ──
     const sevenDaysAgo    = new Date(now.getTime() - 7  * 86400000);
     const fourteenDaysAgo = new Date(now.getTime() - 14 * 86400000);
 
     const [completedThisWeek, completedLastWeek] = await Promise.all([
       this.prisma.task.count({
         where: {
+          ...taskWsScope,
           parentTaskId: null, isReference: false, approvalStatus: 'APPROVED',
           status: 'COMPLETED', updatedAt: { gte: sevenDaysAgo },
         },
       }),
       this.prisma.task.count({
         where: {
+          ...taskWsScope,
           parentTaskId: null, isReference: false, approvalStatus: 'APPROVED',
           status: 'COMPLETED', updatedAt: { gte: fourteenDaysAgo, lt: sevenDaysAgo },
         },

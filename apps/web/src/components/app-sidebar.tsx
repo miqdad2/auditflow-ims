@@ -106,8 +106,10 @@ export function AppSidebar() {
   const canManageUsers = isAdmin || isBusinessAdmin;
   // Departments: SUPER_ADMIN and SUPER_USER only — IT_ADMIN manages system, not business master data
   const canManageDepts = isSuperAdmin || isBusinessAdmin;
-  // Executive Dashboard: elevated users who have been assigned executive dashboard experience
-  const isExecutiveDashboard = isElevated && user?.dashboardExperience === 'EXECUTIVE';
+  // Executive Dashboard: any user with dashboardExperience === EXECUTIVE (no role requirement)
+  const isExecutiveDashboard = user?.dashboardExperience === 'EXECUTIVE';
+  // Dynamic destination for Dashboard nav item and logo click
+  const dashboardHref = isExecutiveDashboard ? '/executive-dashboard' : '/dashboard';
   const displayName = user?.fullName ?? 'User';
 
   const navItems = isElevated
@@ -121,10 +123,12 @@ export function AppSidebar() {
       className="fixed inset-y-0 left-0 z-30 flex w-60 flex-col"
       style={{ backgroundColor: 'var(--sidebar-bg)' }}
     >
-      {/* Brand */}
-      <div
-        className="flex h-16 shrink-0 items-center gap-3 px-4"
+      {/* Brand — clicking returns to the user's dashboard home */}
+      <Link
+        href={dashboardHref}
+        className="flex h-16 shrink-0 items-center gap-3 px-4 transition-opacity hover:opacity-90"
         style={{ borderBottom: '1px solid rgba(255,255,255,0.10)' }}
+        aria-label="AuditFlow IMS home"
       >
         <div
           className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md p-1.5"
@@ -165,14 +169,16 @@ export function AppSidebar() {
             RECAFCO
           </p>
         </div>
-      </div>
+      </Link>
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-2.5 py-4">
         <ul className="flex flex-col gap-1">
           {navItems.map(({ label, href, icon }) => {
-            const active = pathname === href || pathname.startsWith(`${href}/`);
-            return <NavItem key={href} href={href} icon={icon} label={label} active={active} />;
+            // Dashboard item routes to executive-dashboard for Executive users
+            const resolvedHref = href === '/dashboard' ? dashboardHref : href;
+            const active = pathname === resolvedHref || pathname.startsWith(`${resolvedHref}/`);
+            return <NavItem key={href} href={resolvedHref} icon={icon} label={label} active={active} />;
           })}
 
           {/* Executive Dashboard: elevated users with EXECUTIVE dashboard experience */}
