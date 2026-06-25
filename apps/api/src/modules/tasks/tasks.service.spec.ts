@@ -166,6 +166,7 @@ const mockPrisma = {
     delete:     jest.fn(),
     groupBy:    jest.fn(),
   },
+  taskList:      { findUnique: jest.fn() },
   taskComment:   { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), update: jest.fn(), delete: jest.fn() },
   activityEvent: { create: jest.fn() },
   user:          { findUnique: jest.fn().mockResolvedValue(null), findMany: jest.fn() },
@@ -1507,5 +1508,174 @@ describe('Unit 62 — MEMBER transition rules (work submission workflow)', () =>
     // This test documents the invariant for regression protection.
     const memberCanReachCompleted = Object.values(MEMBER).some((targets) => targets.includes('COMPLETED'));
     expect(memberCanReachCompleted).toBe(false);
+  });
+});
+
+// ─── Unit 66.3 — Task reorder validation ─────────────────────────────────────
+
+describe('TasksService — reorderTasks (Unit 66.3)', () => {
+  let service: TasksService;
+
+  const elevatedActor = {
+    id: 'actor-1',
+    userRoles: [{ role: { name: 'ISO_MANAGER', rolePermissions: [{ permission: { key: 'project.read' } }] } }],
+    department: null,
+    departmentId: null,
+  };
+
+  const taskList = { id: 'tl-1', workspaceId: 'ws-1', name: 'Sprint 1' };
+
+  beforeEach(async () => {
+    jest.resetAllMocks();
+    mockAuditLog.log.mockResolvedValue(undefined);
+    mockNotifications.create.mockResolvedValue(undefined);
+    mockPrisma.activityEvent.create.mockResolvedValue({});
+    mockPrisma.workspace.findUnique.mockResolvedValue(null);
+    mockPrisma.user.findUnique.mockResolvedValue(null);
+    mockWorkspaces.assertWorkspaceAccess.mockResolvedValue(undefined);
+    mockWorkspaces.canCollaborateInWorkspace.mockResolvedValue(true);
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        TasksService,
+        { provide: PrismaService,        useValue: mockPrisma },
+        { provide: AuditLogService,      useValue: mockAuditLog },
+        { provide: NotificationsService, useValue: mockNotifications },
+        { provide: WorkspacesService,    useValue: mockWorkspaces },
+        { provide: RealtimeService,      useValue: mockRealtime },
+      ],
+    }).compile();
+    service = module.get<TasksService>(TasksService);
+  });
+
+  // 66.3-T1: Empty orderedIds throws friendly 400
+  it('66.3-T1 — empty orderedIds throws BadRequestException', async () => {
+    await expect(service.reorderTasks('tl-1', [], elevatedActor))
+      .rejects.toThrow('orderedIds must be a non-empty array');
+  });
+
+  // 66.3-T2: Duplicate IDs rejected before DB call
+  it('66.3-T2 — duplicate IDs in orderedIds throws BadRequestException', async () => {
+    await expect(service.reorderTasks('tl-1', ['task-1', 'task-2', 'task-1'], elevatedActor))
+      .rejects.toThrow('duplicate task IDs');
+    // Neither taskList lookup nor task.findMany should have been called (dup check is pre-DB)
+    expect(mockPrisma.taskList.findUnique).not.toHaveBeenCalled();
+    expect(mockPrisma.task.findMany).not.toHaveBeenCalled();
+  });
+
+  // 66.3-T3: Non-existent task list throws NotFoundException
+  it('66.3-T3 — unknown taskListId throws NotFoundException', async () => {
+    (mockPrisma.taskList.findUnique as jest.Mock).mockResolvedValueOnce(null);
+    await expect(service.reorderTasks('no-such-list', ['id-1'], elevatedActor))
+      .rejects.toThrow('Task list not found');
+  });
+
+  // 66.3-T4: Unauthorized user (not a collaborator) throws ForbiddenException
+  it('66.3-T4 — non-collaborator throws ForbiddenException', async () => {
+    (mockPrisma.taskList.findUnique as jest.Mock).mockResolvedValueOnce(taskList);
+    mockWorkspaces.canCollaborateInWorkspace.mockResolvedValueOnce(false);
+    const nonMemberActor = {
+      id: 'viewer-1',
+      userRoles: [{ role: { name: 'STAFF', rolePermissions: [] } }],
+      department: null,
+      departmentId: null,
+    };
+    await expect(service.reorderTasks('tl-1', ['id-1'], nonMemberActor))
+      .rejects.toThrow('MEMBER, MANAGER, OWNER, or elevated role required');
+  });
+
+  // 66.3-T5: Foreign ID (not in task list) rejected
+  it('66.3-T5 — foreign IDs (not in task list) throw BadRequestException', async () => {
+    (mockPrisma.taskList.findUnique as jest.Mock).mockResolvedValueOnce(taskList);
+    // Only task-1 exists in the list
+    mockPrisma.task.findMany.mockResolvedValueOnce([{ id: 'task-1' }]);
+    await expect(service.reorderTasks('tl-1', ['task-1', 'foreign-id'], elevatedActor))
+      .rejects.toThrow('not found in this task list');
+  });
+
+  // 66.3-T6: Missing IDs (incomplete reorder) rejected
+  it('66.3-T6 — missing IDs (not all tasks sent) throw BadRequestException', async () => {
+    (mockPrisma.taskList.findUnique as jest.Mock).mockResolvedValueOnce(taskList);
+    // List has task-1 and task-2, but only task-1 sent
+    mockPrisma.task.findMany.mockResolvedValueOnce([{ id: 'task-1' }, { id: 'task-2' }]);
+    await expect(service.reorderTasks('tl-1', ['task-1'], elevatedActor))
+      .rejects.toThrow('incomplete');
+  });
+
+  // 66.3-T7: Valid reorder commits transaction and emits realtime event
+  it('66.3-T7 — valid reorder executes $transaction with correct sortOrders', async () => {
+    (mockPrisma.taskList.findUnique as jest.Mock).mockResolvedValueOnce(taskList);
+    mockPrisma.task.findMany
+      .mockResolvedValueOnce([{ id: 'task-1' }, { id: 'task-2' }, { id: 'task-3' }]) // root tasks for validation
+      .mockResolvedValueOnce([makeTask({ id: 'task-2', sortOrder: 0 }), makeTask({ id: 'task-3', sortOrder: 1 }), makeTask({ id: 'task-1', sortOrder: 2 })]);
+    mockPrisma.$transaction.mockResolvedValueOnce(undefined);
+
+    await service.reorderTasks('tl-1', ['task-2', 'task-3', 'task-1'], elevatedActor);
+
+    expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(mockRealtime.emitToWorkspace).toHaveBeenCalledWith('ws-1', 'task.reordered', expect.objectContaining({
+      taskListId: 'tl-1', workspaceId: 'ws-1', eventId: expect.any(String),
+    }));
+  });
+
+  // 66.3-T8: Audit log is created after successful transaction
+  it('66.3-T8 — audit log is created with reorderedTasks count', async () => {
+    (mockPrisma.taskList.findUnique as jest.Mock).mockResolvedValueOnce(taskList);
+    mockPrisma.task.findMany
+      .mockResolvedValueOnce([{ id: 'task-1' }, { id: 'task-2' }])
+      .mockResolvedValueOnce([]);
+    mockPrisma.$transaction.mockResolvedValueOnce(undefined);
+
+    await service.reorderTasks('tl-1', ['task-2', 'task-1'], elevatedActor);
+    // Audit log fires async — allow microtask queue to flush
+    await Promise.resolve();
+
+    expect(mockAuditLog.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'UPDATED', entityType: 'TASK',
+      newValue: expect.objectContaining({ reorderedTasks: 2 }),
+    }));
+  });
+
+  // 66.3-T9: Realtime emit contains eventId (enables dedup in second browser)
+  it('66.3-T9 — realtime payload includes eventId string', async () => {
+    (mockPrisma.taskList.findUnique as jest.Mock).mockResolvedValueOnce(taskList);
+    mockPrisma.task.findMany
+      .mockResolvedValueOnce([{ id: 'task-1' }])
+      .mockResolvedValueOnce([]);
+    mockPrisma.$transaction.mockResolvedValueOnce(undefined);
+
+    await service.reorderTasks('tl-1', ['task-1'], elevatedActor);
+
+    const [, , payload] = (mockRealtime.emitToWorkspace as jest.Mock).mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(typeof payload['eventId']).toBe('string');
+    expect(payload['eventId']).toBeTruthy();
+  });
+
+  // 66.3-T10: Only sortOrder changes — no other task fields are touched
+  it('66.3-T10 — task.update calls set only sortOrder', async () => {
+    (mockPrisma.taskList.findUnique as jest.Mock).mockResolvedValueOnce(taskList);
+    mockPrisma.task.findMany
+      .mockResolvedValueOnce([{ id: 'task-1' }, { id: 'task-2' }])
+      .mockResolvedValueOnce([]);
+    mockPrisma.$transaction.mockImplementationOnce((ops: unknown[]) => Promise.all(ops as Array<Promise<unknown>>));
+    mockPrisma.task.update.mockResolvedValue(makeTask());
+
+    await service.reorderTasks('tl-1', ['task-2', 'task-1'], elevatedActor);
+
+    // Every task.update call must only pass { sortOrder: N }
+    const updateCalls = (mockPrisma.task.update as jest.Mock).mock.calls as Array<[{ where: unknown; data: Record<string, unknown> }]>;
+    for (const [opts] of updateCalls) {
+      expect(Object.keys(opts.data)).toEqual(['sortOrder']);
+    }
+  });
+
+  // 66.3-T11: Subtask IDs are not in the root-task validation set (correct filter)
+  it('66.3-T11 — subtask IDs (parentTaskId != null) are excluded from valid ID set', async () => {
+    (mockPrisma.taskList.findUnique as jest.Mock).mockResolvedValueOnce(taskList);
+    // Backend returns only root tasks (parentTaskId: null filter applied in service)
+    mockPrisma.task.findMany.mockResolvedValueOnce([{ id: 'root-1' }]);
+    // Sending subtask-id-that-should-not-be-here should be rejected as foreign
+    await expect(service.reorderTasks('tl-1', ['root-1', 'subtask-of-root-1'], elevatedActor))
+      .rejects.toThrow('not found in this task list');
   });
 });

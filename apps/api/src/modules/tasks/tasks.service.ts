@@ -1887,6 +1887,12 @@ export class TasksService {
       throw new BadRequestException('orderedIds must be a non-empty array');
     }
 
+    // Reject duplicate IDs before any DB call
+    const uniqueIds = new Set(orderedIds);
+    if (uniqueIds.size !== orderedIds.length) {
+      throw new BadRequestException('orderedIds contains duplicate task IDs — each task must appear exactly once');
+    }
+
     // Validate task list and workspace access
     const taskList = await this.prisma.taskList.findUnique({
       where: { id: taskListId },
@@ -1904,24 +1910,35 @@ export class TasksService {
       throw new ForbiddenException('Workspace MEMBER, MANAGER, OWNER, or elevated role required to reorder tasks');
     }
 
-    // Validate all task IDs belong to this task list
-    const tasks = await this.prisma.task.findMany({
-      where: { taskListId },
+    // Validate against root-level tasks only (subtasks are ordered within their parent, not via this endpoint)
+    const rootTasks = await this.prisma.task.findMany({
+      where: { taskListId, parentTaskId: null },
       select: { id: true },
     });
-    const validIds = new Set(tasks.map((t) => t.id));
-    const invalid  = orderedIds.filter((id) => !validIds.has(id));
-    if (invalid.length > 0) {
-      throw new BadRequestException(`Task IDs not found in list: ${invalid.join(', ')}`);
+    const validIds  = new Set(rootTasks.map((t) => t.id));
+
+    // Reject foreign IDs (IDs not belonging to this task list)
+    const foreign = orderedIds.filter((id) => !validIds.has(id));
+    if (foreign.length > 0) {
+      throw new BadRequestException(`Task IDs not found in this task list: ${foreign.join(', ')}`);
     }
 
-    // Update sortOrder in a transaction
+    // Reject incomplete reorders (all root tasks must be included)
+    const missing = [...validIds].filter((id) => !uniqueIds.has(id));
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        `Reorder is incomplete — ${missing.length} task(s) are missing from the provided order. Send the complete task list order.`,
+      );
+    }
+
+    // Update sortOrder atomically
     await this.prisma.$transaction(
       orderedIds.map((id, index) =>
         this.prisma.task.update({ where: { id }, data: { sortOrder: index } }),
       ),
     );
 
+    // Audit log after successful transaction
     void this.auditLog.log({
       actorId,
       action: 'UPDATED',
@@ -1930,12 +1947,16 @@ export class TasksService {
       newValue: { reorderedTasks: orderedIds.length, taskListName: taskList.name },
     }).catch(() => {});
 
-    this.realtime.emitToWorkspace(taskList.workspaceId, 'task.reordered', {
-      taskListId,
-      workspaceId: taskList.workspaceId,
-    });
+    // Emit after commit — wrapped so a socket error cannot undo the committed write
+    try {
+      this.realtime.emitToWorkspace(taskList.workspaceId, 'task.reordered', {
+        taskListId,
+        workspaceId: taskList.workspaceId,
+        eventId: Date.now().toString(),
+      });
+    } catch { /* socket emit failure must not surface as a 500 */ }
 
-    // Return updated tasks ordered by new sortOrder
+    // Return the canonical saved order
     return this.prisma.task.findMany({
       where: { taskListId, parentTaskId: null },
       include: TASK_INCLUDE,

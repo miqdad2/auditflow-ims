@@ -245,10 +245,7 @@ export class TasksController {
 // Route: PATCH /task-lists/:taskListId/tasks/reorder
 
 import { Controller as Ctrl2, Patch as Patch2, Param as Param2, Body as Body2, UseGuards as UseGuards2 } from '@nestjs/common';
-
-class ReorderTasksDto {
-  orderedIds: string[];
-}
+import { ReorderTasksDto } from './dto/reorder-tasks.dto';
 
 @Ctrl2('task-lists')
 @UseGuards2(JwtAuthGuard, PermissionsGuard)

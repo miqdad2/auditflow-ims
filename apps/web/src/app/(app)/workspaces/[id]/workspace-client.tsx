@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback, useMemo, useRef, use } from 'react';
 import {
   Plus, Loader2, ArrowLeft, ListTodo, CheckSquare, FileText, Users,
   Trash2, X, MoreHorizontal, Copy, ClipboardCopy, Move, Eye,
-  Activity, LayoutDashboard, ChevronDown, ChevronUp, Search, Lock, Globe, Building2,
+  Activity, LayoutDashboard, ChevronDown, ChevronUp, ChevronsUp, ChevronsDown,
+  Search, Lock, Globe, Building2,
   AlertTriangle, AlertCircle, CheckCircle2, Clock, FileCheck, RefreshCw,
   ShieldAlert, Wifi, WifiOff, UserCircle, TrendingUp, Pencil, Settings,
   MessageSquare, GitBranch,
@@ -276,8 +277,11 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
   // Local task list order (overrides workspace.taskLists for display after reorder)
   const [localListOrder, setLocalListOrder] = useState<string[] | null>(null);
   const [listReorderSaving, setListReorderSaving] = useState(false);
-  // Local task order override per list
+  // Task reorder
   const [taskReorderSaving, setTaskReorderSaving] = useState(false);
+  // Drag-and-drop state
+  const [dragTaskId, setDragTaskId]       = useState<string | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   // Permissions — incorporate workspace-member role
   const myWsRole         = workspace?.myRole ?? null;
@@ -490,6 +494,9 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
+
+  // Reorder is only available when the full unfiltered manual-order list is visible
+  const isReorderEnabled = canCollaborate && taskFilter === 'all' && !taskSearch.trim() && taskSort === 'manual';
 
   // ── Filtered tasks ────────────────────────────────────────────────────────────
 
@@ -914,32 +921,89 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
     finally { setListReorderSaving(false); }
   }
 
-  async function moveTaskUp(taskId: string) {
-    if (!token) return;
+  // ── Shared reorder function — all four actions + drag share this ─────────────
+
+  async function performReorder(newTasks: typeof tasks) {
+    if (!token || !selectedListId) return;
+    const previousTasks = tasks;
+    setTasks(newTasks);
+    setTaskReorderSaving(true);
+    try {
+      await apiPatchAuth(
+        `/task-lists/${selectedListId}/tasks/reorder`,
+        { orderedIds: newTasks.map((t) => t.id) },
+        token,
+      );
+    } catch {
+      setTasks(previousTasks); // instant rollback
+      showToast('Task order could not be saved. The previous order has been restored.');
+    } finally {
+      setTaskReorderSaving(false);
+    }
+  }
+
+  function moveTaskToTop(taskId: string) {
+    const idx = tasks.findIndex((t) => t.id === taskId);
+    if (idx <= 0) return;
+    const newTasks = [...tasks];
+    newTasks.splice(idx, 1);
+    newTasks.unshift(tasks[idx]);
+    void performReorder(newTasks);
+  }
+
+  function moveTaskUp(taskId: string) {
     const idx = tasks.findIndex((t) => t.id === taskId);
     if (idx <= 0) return;
     const newTasks = [...tasks];
     [newTasks[idx - 1], newTasks[idx]] = [newTasks[idx], newTasks[idx - 1]];
-    setTasks(newTasks);
-    setTaskReorderSaving(true);
-    try {
-      await apiPatchAuth(`/task-lists/${selectedListId}/tasks/reorder`, { orderedIds: newTasks.map((t) => t.id) }, token);
-    } catch { void loadTasks(); showToast('Failed to save task order'); }
-    finally { setTaskReorderSaving(false); }
+    void performReorder(newTasks);
   }
 
-  async function moveTaskDown(taskId: string) {
-    if (!token) return;
+  function moveTaskDown(taskId: string) {
     const idx = tasks.findIndex((t) => t.id === taskId);
     if (idx < 0 || idx >= tasks.length - 1) return;
     const newTasks = [...tasks];
     [newTasks[idx], newTasks[idx + 1]] = [newTasks[idx + 1], newTasks[idx]];
-    setTasks(newTasks);
-    setTaskReorderSaving(true);
-    try {
-      await apiPatchAuth(`/task-lists/${selectedListId}/tasks/reorder`, { orderedIds: newTasks.map((t) => t.id) }, token);
-    } catch { void loadTasks(); showToast('Failed to save task order'); }
-    finally { setTaskReorderSaving(false); }
+    void performReorder(newTasks);
+  }
+
+  function moveTaskToBottom(taskId: string) {
+    const idx = tasks.findIndex((t) => t.id === taskId);
+    if (idx < 0 || idx === tasks.length - 1) return;
+    const newTasks = [...tasks];
+    newTasks.splice(idx, 1);
+    newTasks.push(tasks[idx]);
+    void performReorder(newTasks);
+  }
+
+  // ── Drag-and-drop handlers ────────────────────────────────────────────────────
+
+  function handleDragStart(e: React.DragEvent, taskId: string) {
+    setDragTaskId(taskId);
+    e.dataTransfer.effectAllowed = 'move';
+  }
+
+  function handleDragOver(e: React.DragEvent, index: number) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverIndex(index);
+  }
+
+  function handleDrop(dropIndex: number) {
+    if (dragTaskId === null) return;
+    const fromIdx = tasks.findIndex((t) => t.id === dragTaskId);
+    setDragTaskId(null);
+    setDragOverIndex(null);
+    if (fromIdx < 0 || fromIdx === dropIndex) return;
+    const newTasks = [...tasks];
+    const [removed] = newTasks.splice(fromIdx, 1);
+    newTasks.splice(dropIndex, 0, removed);
+    void performReorder(newTasks);
+  }
+
+  function handleDragEnd() {
+    setDragTaskId(null);
+    setDragOverIndex(null);
   }
 
   function formatDate(iso: string | null) {
@@ -2495,6 +2559,25 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                   </div>
                 </div>
 
+                {/* Reorder saving indicator */}
+                {taskReorderSaving && (
+                  <div className="flex items-center gap-1.5 border-b px-4 py-1.5"
+                    style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-subtle)' }}>
+                    <Loader2 className="h-3 w-3 animate-spin" style={{ color: 'var(--accent-primary)' }} />
+                    <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Saving order…</span>
+                  </div>
+                )}
+
+                {/* Reorder hint — shown to collaborators when not in manual-all mode */}
+                {canCollaborate && !isReorderEnabled && tasks.length > 1 && (
+                  <div className="flex items-center gap-2 border-b px-4 py-1.5"
+                    style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-subtle)' }}>
+                    <span className="text-[10px]" style={{ color: 'var(--text-disabled)' }}>
+                      Manual ordering is available in <strong>All tasks</strong> with <strong>Manual order</strong> selected and no active search or filter.
+                    </span>
+                  </div>
+                )}
+
                 {/* Task table */}
                 <div className="flex-1 overflow-y-auto">
                   {tasksLoading ? (
@@ -2535,6 +2618,9 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                     <table className="w-full border-collapse">
                       <thead>
                         <tr style={{ borderBottom: '1px solid var(--border-default)' }}>
+                          {isReorderEnabled && (
+                            <th className="w-7 px-2 py-2.5" style={{ backgroundColor: 'var(--bg-subtle)' }} />
+                          )}
                           {[
                             { label: 'Title',    cls: '' },
                             { label: 'Status',   cls: '' },
@@ -2554,12 +2640,35 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                         </tr>
                       </thead>
                       <tbody>
-                        {filteredTasks.map((task) => (
-                          <tr key={task.id} className="group cursor-pointer transition-colors"
-                            style={{ borderBottom: '1px solid var(--border-subtle)' }}
-                            onClick={() => setSelectedTaskId(task.id)}
-                            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--bg-muted)')}
-                            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}>
+                        {filteredTasks.map((task, taskIdx) => (
+                          <tr key={task.id}
+                            className="group cursor-pointer transition-colors"
+                            draggable={isReorderEnabled}
+                            style={{
+                              borderBottom: '1px solid var(--border-subtle)',
+                              opacity: dragTaskId === task.id ? 0.4 : 1,
+                              outline: dragOverIndex === taskIdx && dragTaskId !== task.id ? '2px solid var(--accent-primary)' : 'none',
+                              outlineOffset: '-1px',
+                            }}
+                            onClick={(e) => { if (dragTaskId) return; setSelectedTaskId(task.id); void e; }}
+                            onMouseEnter={(e) => { if (!dragTaskId) e.currentTarget.style.backgroundColor = 'var(--bg-muted)'; }}
+                            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                            onDragStart={isReorderEnabled ? (e) => handleDragStart(e, task.id) : undefined}
+                            onDragOver={isReorderEnabled ? (e) => handleDragOver(e, taskIdx) : undefined}
+                            onDrop={isReorderEnabled ? () => handleDrop(taskIdx) : undefined}
+                            onDragEnd={isReorderEnabled ? handleDragEnd : undefined}>
+                            {isReorderEnabled && (
+                              <td className="w-7 px-2 py-3 text-center"
+                                draggable={false}
+                                onMouseDown={(e) => e.stopPropagation()}
+                                onClick={(e) => e.stopPropagation()}>
+                                <span className="cursor-grab select-none text-[14px] leading-none"
+                                  style={{ color: 'var(--text-disabled)' }}
+                                  title="Drag to reorder">
+                                  ⠿
+                                </span>
+                              </td>
+                            )}
                             <td className="px-4 py-3 text-sm font-medium" style={{ color: 'var(--text-primary)', maxWidth: '260px' }}>
                               <div className="flex items-center gap-1.5 min-w-0">
                                 <span className="line-clamp-1">{task.title}</span>
@@ -2807,24 +2916,23 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                                 {openMenuId === task.id && (
                                   <div className="absolute right-0 top-full z-20 mt-1 overflow-hidden rounded-xl shadow-lg"
                                     style={{ backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-default)', minWidth: '170px' }}>
-                                    {[
-                                      { icon: Eye,          label: 'Open task',    action: () => { setSelectedTaskId(task.id); setOpenMenuId(null); }, del: false },
-                                      { icon: ClipboardCopy,label: 'Copy link',    action: () => copyTaskLink(task.id), del: false },
-                                      { icon: Copy,         label: 'Duplicate',    action: () => void handleDuplicate(task.id), del: false },
-                                      // Move Up/Down — only available in manual-order, unfiltered list view
-                                      ...(canCollaborate && taskFilter === 'all' && !taskSearch.trim() && taskSort === 'manual'
-                                        ? [
-                                            ...(filteredTasks.findIndex((t) => t.id === task.id) > 0
-                                              ? [{ icon: ChevronUp,   label: 'Move up',   action: () => { setOpenMenuId(null); void moveTaskUp(task.id); },   del: false }]
-                                              : []),
-                                            ...(filteredTasks.findIndex((t) => t.id === task.id) < filteredTasks.length - 1
-                                              ? [{ icon: ChevronDown, label: 'Move down', action: () => { setOpenMenuId(null); void moveTaskDown(task.id); }, del: false }]
-                                              : []),
-                                          ]
-                                        : []),
-                                      ...(otherLists.length > 0 ? [{ icon: Move, label: 'Move to list…', action: () => { setMoveTaskId(task.id); setMoveTargetListId(otherLists[0]?.id ?? ''); setOpenMenuId(null); }, del: false }] : []),
-                                      ...(canDeleteTask ? [{ icon: Trash2, label: 'Delete task', action: () => void handleDeleteTask(task.id), del: true }] : []),
-                                    ].map(({ icon: Icon, label, action, del }) => (
+                                    {(() => {
+                                      const taskIdx2 = tasks.findIndex((t) => t.id === task.id);
+                                      const isFirst  = taskIdx2 === 0;
+                                      const isLast   = taskIdx2 === tasks.length - 1;
+                                      return [
+                                        { icon: Eye,          label: 'Open task',    action: () => { setSelectedTaskId(task.id); setOpenMenuId(null); }, del: false },
+                                        { icon: ClipboardCopy,label: 'Copy link',    action: () => copyTaskLink(task.id), del: false },
+                                        { icon: Copy,         label: 'Duplicate',    action: () => void handleDuplicate(task.id), del: false },
+                                        // Fallback reorder actions — all four, enabled only in manual-all mode
+                                        ...(isReorderEnabled && !isFirst  ? [{ icon: ChevronsUp,  label: 'Move to top',    action: () => { setOpenMenuId(null); moveTaskToTop(task.id); },    del: false }] : []),
+                                        ...(isReorderEnabled && !isFirst  ? [{ icon: ChevronUp,   label: 'Move up',         action: () => { setOpenMenuId(null); moveTaskUp(task.id); },        del: false }] : []),
+                                        ...(isReorderEnabled && !isLast   ? [{ icon: ChevronDown, label: 'Move down',        action: () => { setOpenMenuId(null); moveTaskDown(task.id); },      del: false }] : []),
+                                        ...(isReorderEnabled && !isLast   ? [{ icon: ChevronsDown,label: 'Move to bottom',  action: () => { setOpenMenuId(null); moveTaskToBottom(task.id); }, del: false }] : []),
+                                        ...(otherLists.length > 0 ? [{ icon: Move, label: 'Move to list…', action: () => { setMoveTaskId(task.id); setMoveTargetListId(otherLists[0]?.id ?? ''); setOpenMenuId(null); }, del: false }] : []),
+                                        ...(canDeleteTask ? [{ icon: Trash2, label: 'Delete task', action: () => void handleDeleteTask(task.id), del: true }] : []),
+                                      ];
+                                    })().map(({ icon: Icon, label, action, del }) => (
                                       <button key={label} type="button" onClick={action}
                                         className="flex w-full items-center gap-2 px-3 py-2 text-xs text-left"
                                         style={{ color: del ? 'var(--state-error)' : 'var(--text-primary)' }}
