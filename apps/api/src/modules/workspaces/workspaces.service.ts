@@ -263,7 +263,7 @@ export class WorkspacesService {
             orderBy: { sortOrder: 'asc' },
             include: {
               department: { select: { id: true, name: true } },
-              _count: { select: { tasks: true } },
+              _count: { select: { tasks: { where: { parentTaskId: null } } } },
             },
           },
         },
@@ -313,12 +313,12 @@ export class WorkspacesService {
         select: { status: true },
       }),
       this.prisma.task.count({
-        where: { workspaceId, status: { notIn: ['COMPLETED', 'CANCELLED'] } },
+        where: { workspaceId, parentTaskId: null, status: { notIn: ['COMPLETED', 'CANCELLED'] } },
       }),
       this.prisma.task.count({
-        where: { workspaceId, dueDate: { lt: now }, status: { notIn: ['COMPLETED', 'CANCELLED'] } },
+        where: { workspaceId, parentTaskId: null, dueDate: { lt: now }, status: { notIn: ['COMPLETED', 'CANCELLED'] } },
       }),
-      this.prisma.task.count({ where: { workspaceId, status: 'COMPLETED' } }),
+      this.prisma.task.count({ where: { workspaceId, parentTaskId: null, status: 'COMPLETED' } }),
       this.prisma.document.findMany({ where: { workspaceId }, select: { status: true } }),
       this.prisma.ncrCapa.count({ where: { workspaceId, status: { notIn: ['VERIFIED', 'CLOSED'] } } }),
       this.prisma.ncrCapa.count({
@@ -355,10 +355,10 @@ export class WorkspacesService {
       this.prisma.page.findFirst({ where: { workspaceId, isHome: true }, select: { id: true, title: true } }),
       this.prisma.workspacePinnedItem.findMany({ where: { workspaceId }, orderBy: { createdAt: 'asc' } }),
       this.prisma.task.count({
-        where: { workspaceId, assigneeId: actorId, status: { notIn: ['COMPLETED', 'CANCELLED'] } },
+        where: { workspaceId, parentTaskId: null, assigneeId: actorId, status: { notIn: ['COMPLETED', 'CANCELLED'] } },
       }),
       this.prisma.task.count({
-        where: { workspaceId, assigneeId: actorId, dueDate: { lt: now }, status: { notIn: ['COMPLETED', 'CANCELLED'] } },
+        where: { workspaceId, parentTaskId: null, assigneeId: actorId, dueDate: { lt: now }, status: { notIn: ['COMPLETED', 'CANCELLED'] } },
       }),
       this.prisma.workspaceMember.findMany({
         where: { workspaceId },

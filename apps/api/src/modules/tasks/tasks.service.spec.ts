@@ -1860,3 +1860,187 @@ describe('TasksService — create() taskListId targeting (Unit 66.4)', () => {
     expect(mockPrisma.task.delete).not.toHaveBeenCalled();
   });
 });
+
+// ── Unit 66.3.2 — Subtask exclusion from main task table ─────────────────────
+// Verifies that:
+//  • findMany always receives parentTaskId: null (root tasks only)
+//  • findOne still returns embedded subtasks
+//  • subtask creation stores parentTaskId correctly
+//  • reference-only and recurrence-child root tasks remain visible
+
+describe('TasksService — Unit 66.3.2 subtask hierarchy exclusion', () => {
+  let service: TasksService;
+
+  const elevatedActor = {
+    id: 'actor-1',
+    userRoles: [{ role: { name: 'ISO_MANAGER', rolePermissions: [{ permission: { key: 'tasks.create' } }] } }],
+    department: null,
+    departmentId: null,
+  };
+
+  beforeEach(async () => {
+    jest.resetAllMocks();
+    mockAuditLog.log.mockResolvedValue(undefined);
+    mockNotifications.create.mockResolvedValue(undefined);
+    mockPrisma.activityEvent.create.mockResolvedValue({});
+    mockPrisma.workspace.findUnique.mockResolvedValue(null);
+    mockPrisma.user.findUnique.mockResolvedValue(null);
+    mockWorkspaces.assertWorkspaceAccess.mockResolvedValue(undefined);
+    mockWorkspaces.assertCanBeAssigned.mockResolvedValue(undefined);
+    mockWorkspaces.canCollaborateInWorkspace.mockResolvedValue(true);
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        TasksService,
+        { provide: PrismaService,         useValue: mockPrisma },
+        { provide: AuditLogService,       useValue: mockAuditLog },
+        { provide: NotificationsService,  useValue: mockNotifications },
+        { provide: WorkspacesService,     useValue: mockWorkspaces },
+        { provide: RealtimeService,       useValue: mockRealtime },
+      ],
+    }).compile();
+    service = module.get<TasksService>(TasksService);
+  });
+
+  // T1: findMany (workspace + list scoped) sends parentTaskId: null to Prisma
+  it('66.3.2-T1 — findMany with workspaceId+taskListId uses parentTaskId: null', async () => {
+    mockPrisma.task.findMany.mockResolvedValueOnce([makeTask()]);
+
+    await service.findMany(
+      { workspaceId: 'ws-1', taskListId: 'tl-1', parentTaskId: null },
+      'actor-1', ['ISO_MANAGER'], null,
+    );
+
+    const args = (mockPrisma.task.findMany as jest.Mock).mock.calls[0] as [{ where: Record<string, unknown> }];
+    expect(args[0].where).toMatchObject({ parentTaskId: null });
+  });
+
+  // T2: findMany (workspace only, elevated) sends parentTaskId: null
+  it('66.3.2-T2 — findMany workspace-only elevated query uses parentTaskId: null', async () => {
+    mockPrisma.task.findMany.mockResolvedValueOnce([makeTask()]);
+
+    await service.findMany(
+      { workspaceId: 'ws-1', parentTaskId: null },
+      'actor-1', ['ISO_MANAGER'], null,
+    );
+
+    const args = (mockPrisma.task.findMany as jest.Mock).mock.calls[0] as [{ where: Record<string, unknown> }];
+    expect(args[0].where).toMatchObject({ parentTaskId: null });
+  });
+
+  // T3: findMany global (no workspace filter) sends parentTaskId: null
+  it('66.3.2-T3 — findMany global query (elevated) uses parentTaskId: null', async () => {
+    mockPrisma.task.findMany.mockResolvedValueOnce([makeTask()]);
+
+    await service.findMany(
+      { parentTaskId: null },
+      'actor-1', ['ISO_MANAGER'], null,
+    );
+
+    const args = (mockPrisma.task.findMany as jest.Mock).mock.calls[0] as [{ where: Record<string, unknown> }];
+    expect(args[0].where).toMatchObject({ parentTaskId: null });
+  });
+
+  // T4: findOne returns the subtasks array embedded in the parent task
+  it('66.3.2-T4 — findOne returns subtasks array under the parent task', async () => {
+    const subtask = makeTask({ id: 'sub-1', parentTaskId: 'task-1', title: 'Subtask A' });
+    const parentTask = {
+      ...makeTask({ id: 'task-1', title: 'Parent Task' }),
+      subtasks: [subtask],
+      approvalStatus: 'APPROVED',
+    };
+    mockPrisma.task.findUnique.mockResolvedValueOnce(parentTask);
+
+    const result = await service.findOne('task-1', 'actor-1', ['ISO_MANAGER']) as typeof parentTask;
+
+    expect(result.subtasks).toHaveLength(1);
+    expect(result.subtasks[0].id).toBe('sub-1');
+    expect(result.subtasks[0].parentTaskId).toBe('task-1');
+  });
+
+  // T5: create() with parentTaskId persists the subtask relationship
+  it('66.3.2-T5 — create() with parentTaskId saves the subtask relationship', async () => {
+    const subtask = makeTask({ id: 'sub-1', parentTaskId: 'task-parent-1', title: 'Subtask' });
+    mockPrisma.task.create.mockResolvedValueOnce(subtask);
+
+    await service.create(
+      { workspaceId: 'ws-1', taskListId: 'tl-1', parentTaskId: 'task-parent-1', title: 'Subtask' },
+      elevatedActor.id, ['ISO_MANAGER'], null, [],
+    );
+
+    const createCall = (mockPrisma.task.create as jest.Mock).mock.calls[0] as [{ data: Record<string, unknown> }];
+    expect(createCall[0].data['parentTaskId']).toBe('task-parent-1');
+  });
+
+  // T6: reference-only root tasks are not excluded (isReference + parentTaskId: null)
+  it('66.3.2-T6 — reference-only root task is visible (parentTaskId: null, isReference: true)', async () => {
+    const refTask = makeTask({ id: 'ref-1', isReference: true, parentTaskId: null });
+    mockPrisma.task.findMany.mockResolvedValueOnce([refTask]);
+
+    const result = await service.findMany(
+      { workspaceId: 'ws-1', parentTaskId: null },
+      'actor-1', ['ISO_MANAGER'], null,
+    );
+
+    // Reference root tasks are returned — isReference does not affect parentTaskId filter
+    expect(result.some((t) => t.id === 'ref-1')).toBe(true);
+  });
+
+  // T7: recurrence child (recurrenceParentId set, parentTaskId null) is visible as root task
+  it('66.3.2-T7 — recurrence child root task (recurrenceParentId set, parentTaskId null) is visible', async () => {
+    const childTask = makeTask({
+      id: 'child-1',
+      parentTaskId: null,          // it is a ROOT task
+      recurrenceParentId: 'src-1', // generated from recurrence
+    });
+    mockPrisma.task.findMany.mockResolvedValueOnce([childTask]);
+
+    const result = await service.findMany(
+      { workspaceId: 'ws-1', parentTaskId: null },
+      'actor-1', ['ISO_MANAGER'], null,
+    );
+
+    // Recurrence child is a root task (parentTaskId: null) and must appear
+    expect(result.some((t) => t.id === 'child-1')).toBe(true);
+  });
+
+  // T8: reorder validation query uses parentTaskId: null — regression for 66.3.1
+  it('66.3.2-T8 — reorderTasks validation query uses parentTaskId: null (no subtasks in reorder)', async () => {
+    (mockPrisma.taskList.findUnique as jest.Mock).mockResolvedValueOnce({
+      id: 'tl-1', workspaceId: 'ws-1', name: 'List 1',
+    });
+    mockPrisma.task.findMany
+      .mockResolvedValueOnce([{ id: 'root-1' }, { id: 'root-2' }]) // root task validation
+      .mockResolvedValueOnce([{ id: 'root-1' }, { id: 'root-2' }]); // reorder return
+    mockPrisma.$transaction.mockResolvedValue(undefined);
+    mockWorkspaces.canCollaborateInWorkspace.mockResolvedValue(true);
+
+    await service.reorderTasks('tl-1', ['root-2', 'root-1'], {
+      id: 'actor-1',
+      userRoles: [{ role: { name: 'ISO_MANAGER', rolePermissions: [] } }],
+      department: null, departmentId: null,
+    });
+
+    const validationCall = (mockPrisma.task.findMany as jest.Mock).mock.calls[0] as [{ where: Record<string, unknown> }];
+    expect(validationCall[0].where).toMatchObject({ taskListId: 'tl-1', parentTaskId: null });
+  });
+
+  // T9: subtask IDs are rejected by reorder (parentTaskId: null validation excludes them)
+  it('66.3.2-T9 — subtask ID in reorder orderedIds is rejected as foreign', async () => {
+    (mockPrisma.taskList.findUnique as jest.Mock).mockResolvedValueOnce({
+      id: 'tl-1', workspaceId: 'ws-1', name: 'List 1',
+    });
+    // Root tasks do not include the subtask-id
+    mockPrisma.task.findMany.mockResolvedValueOnce([{ id: 'root-1' }]);
+    mockWorkspaces.canCollaborateInWorkspace.mockResolvedValue(true);
+
+    // subtask-id is not in the validated root set → rejected as foreign
+    await expect(
+      service.reorderTasks('tl-1', ['root-1', 'subtask-id'], {
+        id: 'actor-1',
+        userRoles: [{ role: { name: 'ISO_MANAGER', rolePermissions: [] } }],
+        department: null, departmentId: null,
+      }),
+    ).rejects.toThrow();
+  });
+});

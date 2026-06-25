@@ -29,7 +29,7 @@ export class TaskListsService {
       orderBy: { sortOrder: 'asc' },
       include: {
         department: { select: { id: true, name: true } },
-        _count: { select: { tasks: true } },
+        _count: { select: { tasks: { where: { parentTaskId: null } } } },
       },
     });
   }
@@ -56,7 +56,7 @@ export class TaskListsService {
       },
       include: {
         department: { select: { id: true, name: true } },
-        _count: { select: { tasks: true } },
+        _count: { select: { tasks: { where: { parentTaskId: null } } } },
       },
     });
 
@@ -84,7 +84,7 @@ export class TaskListsService {
       },
       include: {
         department: { select: { id: true, name: true } },
-        _count: { select: { tasks: true } },
+        _count: { select: { tasks: { where: { parentTaskId: null } } } },
       },
     });
 

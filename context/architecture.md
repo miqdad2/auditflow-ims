@@ -224,6 +224,32 @@ setSelectedListId((currentId) => {
 
 **Background refresh**: `refreshWorkspaceQuiet` does not call `setLoading(true)` — no loading spinner during realtime-triggered workspace refreshes.
 
+## Task Hierarchy Model
+
+**Root task**: `parentTaskId = null`. Appears in the main workspace task table, global Tasks page, and all operational counts and metrics.
+
+**Subtask**: `parentTaskId = parent task ID`. Displayed only inside the parent-task detail panel. Never appears as a top-level row.
+
+**Recurrence children** (`recurrenceParentId` set, `parentTaskId = null`) are root tasks — visible in the main task table.
+
+**Reference-only tasks** (`isReference = true`) are independent of hierarchy — they appear as root tasks when `parentTaskId = null`.
+
+The following represent root tasks only (`parentTaskId: null`):
+- Main workspace task table query (`GET /tasks` controller hardcodes `parentTaskId: null`)
+- Frontend defensive filter: `data.filter(t => t.parentTaskId === null)` in `loadTasks()`
+- Global Tasks page (both `/tasks` and `/dashboard/my-tasks`)
+- Task list sidebar count badges (`_count.tasks` uses Prisma filtered count: `{ where: { parentTaskId: null } }`)
+- Workspace overview work counts (open/overdue/completed) and myWork counts
+- Dashboard KPI counts, reports counts, Action Center detection rules
+- All filter/count badges in the workspace task table
+- Reorder validation (`reorderTasks` queries `{ taskListId, parentTaskId: null }`)
+
+Subtasks appear only in:
+- Parent-task detail: `findOne` includes `subtasks` relation
+- `task._count.subtasks` informational badge in task rows
+
+The task-list delete guard (`_count.tasks`) counts ALL tasks (root + subtasks) for safety. Subtask deletion is blocked at the root-task level.
+
 ## Task Ordering Model
 
 Tasks within a task list are ordered by `sortOrder` (integer, 0-based). Root tasks and subtasks each have independent `sortOrder` values.
