@@ -204,6 +204,21 @@ Backend authorization is always enforced. `assertWorkspaceAccess` with ALL mode 
 Users with `dashboardExperience = EXECUTIVE` see: Dashboard → ISO Workspaces → Reports → Notifications.
 Technical admin items (Admin Settings, System Health, System Errors) are only shown when the same account separately has SUPER_ADMIN or IT_ADMIN system access roles.
 
+## Task Ordering Model
+
+Tasks within a task list are ordered by `sortOrder` (integer, 0-based). Root tasks and subtasks each have independent `sortOrder` values.
+
+**Root task ordering** (`parentTaskId: null`):
+- `PATCH /task-lists/:id/tasks/reorder` accepts `{ orderedIds: string[] }` — all root task IDs for the list, in the desired sequence.
+- Backend validates: no duplicates, no foreign IDs, no child IDs, complete coverage of all root tasks.
+- `sortOrder` is updated atomically in a single Prisma `$transaction`.
+- Frontend `performReorder()` sends only `parentTaskId === null` IDs, ensuring the payload matches backend expectations exactly.
+- Realtime event `task.reordered` is emitted after commit. The caller must NOT supply `eventId` — `RealtimeService.emit()` auto-injects `randomUUID()` via `{ eventId: randomUUID(), occurredAt, ...payload }` spread.
+
+**Subtask ordering**: Subtasks are ordered within their parent task context. They are not included in root-task reorder requests and must not be sent in `orderedIds`.
+
+**RealtimeService eventId convention**: Every event emitted via `RealtimeService.emit()` receives a `randomUUID()` event ID automatically. Callers must not supply `eventId` in the payload object because the `...payload` spread comes after the generated UUID — a caller-supplied `eventId` would override the project-standard UUID. The frontend deduplication layer (`use-realtime-invalidation.ts`) relies on proper UUID format for TTL-based dedup.
+
 ## Future Integration Notes
 
 - The system is separate from the maintenance system in phase 1.

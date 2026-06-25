@@ -108,6 +108,24 @@
 - `DashboardService.getExecutiveSummary()` already accepts and respects `visibilityMode` — no changes needed there.
 - Never hardcode a specific user ID into executive visibility logic. The behavior must work for any future executive user with `workspaceVisibilityMode = 'ALL'`.
 
+## Task Reorder Contract
+
+- **DTO**: `ReorderTasksDto` must use `@IsArray() @ArrayNotEmpty() @IsString({ each: true })` decorators. The global `ValidationPipe` uses `{ whitelist: true, forbidNonWhitelisted: true }` — any undecorated property is rejected with HTTP 400 before reaching the service.
+- **Scope**: Reorder applies only to root-level tasks (`parentTaskId: null`). Subtasks have their own independent `sortOrder` within their parent context and must not be included in reorder payloads.
+- **Frontend payload**: `performReorder()` must filter `newTasks.filter((t) => t.parentTaskId === null).map((t) => t.id)` before sending `orderedIds` — even if the `tasks` array contains subtasks returned by the backend.
+- **Backend validation**: `reorderTasks()` must validate against `{ taskListId, parentTaskId: null }` (root tasks only). It must reject: empty array, duplicate IDs, foreign IDs, missing IDs (completeness check).
+- **Atomic persistence**: All `sortOrder` updates must run inside a single `$transaction`. Only `sortOrder` changes — no other task fields.
+- **Realtime emit**: After commit, emit `task.reordered` via `RealtimeService.emitToWorkspace()`. Do NOT include `eventId` in the caller payload — `RealtimeService.emit()` auto-injects `randomUUID()` via `{ eventId: randomUUID(), occurredAt, ...payload }`. A caller-supplied `eventId` overrides the UUID.
+- **Optimistic rollback**: Frontend saves `previousTasks` before `setTasks(newTasks)`. On API failure, restores `previousTasks` immediately and shows toast: `"Task order could not be saved. The previous order has been restored."`
+- **Availability guard**: Reorder is enabled only when `taskFilter === 'all' && taskSort === 'manual' && !taskSearch.trim() && canCollaborate`.
+
+## RealtimeService EventId Convention
+
+- Every event emitted via `RealtimeService.emit()` / `emitToWorkspace()` / `emitToUser()` automatically receives a project-standard `randomUUID()` event ID via `{ eventId: randomUUID(), occurredAt, ...callerPayload }`.
+- Callers must **not** include `eventId` in their payload. Because `...callerPayload` comes after the generated UUID in the spread, a caller-supplied `eventId` would override the UUID.
+- The frontend deduplication layer (`use-realtime-invalidation.ts`) uses `seenEventIds` (Map with 60s TTL) and relies on proper unique UUID format per event.
+- Use `randomUUID` from `'crypto'` (already imported in `tasks.service.ts` for `recurrenceSeriesId`). Do not use `Date.now().toString()` as an event identifier.
+
 ## Permanent Deletion Rules
 
 - **Only SUPER_ADMIN can permanently delete tasks or task lists.** All other roles (SUPER_USER, ISO_MANAGER, QHSE_USER, IT_ADMIN, DEPARTMENT_MANAGER, STAFF) are denied with HTTP 403.

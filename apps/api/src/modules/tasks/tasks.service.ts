@@ -1947,12 +1947,13 @@ export class TasksService {
       newValue: { reorderedTasks: orderedIds.length, taskListName: taskList.name },
     }).catch(() => {});
 
-    // Emit after commit — wrapped so a socket error cannot undo the committed write
+    // Emit after commit — wrapped so a socket error cannot undo the committed write.
+    // Do NOT supply eventId here; RealtimeService.emit() auto-injects randomUUID()
+    // so caller-supplied values would override the project-standard UUID.
     try {
       this.realtime.emitToWorkspace(taskList.workspaceId, 'task.reordered', {
         taskListId,
         workspaceId: taskList.workspaceId,
-        eventId: Date.now().toString(),
       });
     } catch { /* socket emit failure must not surface as a 500 */ }
 

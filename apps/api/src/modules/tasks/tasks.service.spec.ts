@@ -1602,8 +1602,8 @@ describe('TasksService — reorderTasks (Unit 66.3)', () => {
       .rejects.toThrow('incomplete');
   });
 
-  // 66.3-T7: Valid reorder commits transaction and emits realtime event
-  it('66.3-T7 — valid reorder executes $transaction with correct sortOrders', async () => {
+  // 66.3-T7: Valid reorder commits transaction and emits realtime event (no caller-supplied eventId)
+  it('66.3-T7 — valid reorder executes $transaction and emits task.reordered', async () => {
     (mockPrisma.taskList.findUnique as jest.Mock).mockResolvedValueOnce(taskList);
     mockPrisma.task.findMany
       .mockResolvedValueOnce([{ id: 'task-1' }, { id: 'task-2' }, { id: 'task-3' }]) // root tasks for validation
@@ -1613,9 +1613,12 @@ describe('TasksService — reorderTasks (Unit 66.3)', () => {
     await service.reorderTasks('tl-1', ['task-2', 'task-3', 'task-1'], elevatedActor);
 
     expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+    // Verify workspace and taskListId in the payload — caller must not supply eventId
     expect(mockRealtime.emitToWorkspace).toHaveBeenCalledWith('ws-1', 'task.reordered', expect.objectContaining({
-      taskListId: 'tl-1', workspaceId: 'ws-1', eventId: expect.any(String),
+      taskListId: 'tl-1', workspaceId: 'ws-1',
     }));
+    const callerPayload = (mockRealtime.emitToWorkspace as jest.Mock).mock.calls[0][2] as Record<string, unknown>;
+    expect(callerPayload).not.toHaveProperty('eventId'); // RealtimeService injects its own randomUUID()
   });
 
   // 66.3-T8: Audit log is created after successful transaction
@@ -1636,8 +1639,8 @@ describe('TasksService — reorderTasks (Unit 66.3)', () => {
     }));
   });
 
-  // 66.3-T9: Realtime emit contains eventId (enables dedup in second browser)
-  it('66.3-T9 — realtime payload includes eventId string', async () => {
+  // 66.3-T9: Caller does NOT supply eventId — RealtimeService auto-injects project-standard UUID
+  it('66.3-T9 — caller payload has no eventId (RealtimeService injects randomUUID)', async () => {
     (mockPrisma.taskList.findUnique as jest.Mock).mockResolvedValueOnce(taskList);
     mockPrisma.task.findMany
       .mockResolvedValueOnce([{ id: 'task-1' }])
@@ -1646,9 +1649,14 @@ describe('TasksService — reorderTasks (Unit 66.3)', () => {
 
     await service.reorderTasks('tl-1', ['task-1'], elevatedActor);
 
-    const [, , payload] = (mockRealtime.emitToWorkspace as jest.Mock).mock.calls[0] as [string, string, Record<string, unknown>];
-    expect(typeof payload['eventId']).toBe('string');
-    expect(payload['eventId']).toBeTruthy();
+    const callerPayload = (mockRealtime.emitToWorkspace as jest.Mock).mock.calls[0][2] as Record<string, unknown>;
+    // The caller must not supply eventId so RealtimeService.emit() can inject its own randomUUID().
+    // RealtimeService enriches: { eventId: randomUUID(), occurredAt, ...callerPayload }
+    // If callerPayload.eventId were present, it would override the UUID — breaking project convention.
+    expect(callerPayload).not.toHaveProperty('eventId');
+    // Ensure the task/workspace identifiers are still present
+    expect(callerPayload['taskListId']).toBe('tl-1');
+    expect(callerPayload['workspaceId']).toBe('ws-1');
   });
 
   // 66.3-T10: Only sortOrder changes — no other task fields are touched
@@ -1677,5 +1685,94 @@ describe('TasksService — reorderTasks (Unit 66.3)', () => {
     // Sending subtask-id-that-should-not-be-here should be rejected as foreign
     await expect(service.reorderTasks('tl-1', ['root-1', 'subtask-of-root-1'], elevatedActor))
       .rejects.toThrow('not found in this task list');
+  });
+});
+
+// ─── Unit 66.3.1 — EventId convention and root-task scope alignment ───────────
+
+describe('TasksService — reorderTasks (Unit 66.3.1 hardening)', () => {
+  let service: TasksService;
+
+  const elevatedActor = {
+    id: 'actor-1',
+    userRoles: [{ role: { name: 'ISO_MANAGER', rolePermissions: [{ permission: { key: 'project.read' } }] } }],
+    department: null,
+    departmentId: null,
+  };
+
+  const taskList = { id: 'tl-1', workspaceId: 'ws-1', name: 'Sprint 1' };
+
+  beforeEach(async () => {
+    jest.resetAllMocks();
+    mockAuditLog.log.mockResolvedValue(undefined);
+    mockNotifications.create.mockResolvedValue(undefined);
+    mockPrisma.activityEvent.create.mockResolvedValue({});
+    mockPrisma.workspace.findUnique.mockResolvedValue(null);
+    mockPrisma.user.findUnique.mockResolvedValue(null);
+    mockWorkspaces.assertWorkspaceAccess.mockResolvedValue(undefined);
+    mockWorkspaces.canCollaborateInWorkspace.mockResolvedValue(true);
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        TasksService,
+        { provide: PrismaService,        useValue: mockPrisma },
+        { provide: AuditLogService,      useValue: mockAuditLog },
+        { provide: NotificationsService, useValue: mockNotifications },
+        { provide: WorkspacesService,    useValue: mockWorkspaces },
+        { provide: RealtimeService,      useValue: mockRealtime },
+      ],
+    }).compile();
+    service = module.get<TasksService>(TasksService);
+  });
+
+  // 66.3.1-T1: Caller payload has no eventId — RealtimeService injects project-standard randomUUID
+  it('66.3.1-T1 — reorder emit caller payload never includes eventId (project UUID convention)', async () => {
+    (mockPrisma.taskList.findUnique as jest.Mock).mockResolvedValueOnce(taskList);
+    mockPrisma.task.findMany
+      .mockResolvedValueOnce([{ id: 'task-a' }, { id: 'task-b' }])
+      .mockResolvedValueOnce([]);
+    mockPrisma.$transaction.mockResolvedValueOnce(undefined);
+
+    await service.reorderTasks('tl-1', ['task-b', 'task-a'], elevatedActor);
+
+    const callerPayload = (mockRealtime.emitToWorkspace as jest.Mock).mock.calls[0][2] as Record<string, unknown>;
+    // Caller must NOT supply eventId — RealtimeService.emit() enriches with { eventId: randomUUID(), ...payload }
+    // If caller supplied eventId it would override the UUID via spread, violating project convention.
+    expect(callerPayload).not.toHaveProperty('eventId');
+  });
+
+  // 66.3.1-T2: Two rapid reorder calls pass independent non-identical payloads to emitToWorkspace
+  it('66.3.1-T2 — two sequential reorder calls emit two independent events', async () => {
+    // Both calls produce their own emitToWorkspace invocation
+    (mockPrisma.taskList.findUnique as jest.Mock)
+      .mockResolvedValueOnce(taskList)
+      .mockResolvedValueOnce(taskList);
+    mockPrisma.task.findMany
+      .mockResolvedValueOnce([{ id: 'task-a' }, { id: 'task-b' }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: 'task-a' }, { id: 'task-b' }])
+      .mockResolvedValueOnce([]);
+    mockPrisma.$transaction.mockResolvedValue(undefined);
+
+    await service.reorderTasks('tl-1', ['task-b', 'task-a'], elevatedActor);
+    await service.reorderTasks('tl-1', ['task-a', 'task-b'], elevatedActor);
+
+    expect(mockRealtime.emitToWorkspace).toHaveBeenCalledTimes(2);
+    // RealtimeService (not mocked here) would inject unique UUIDs per call —
+    // verified separately in realtime.coverage.spec.ts Case 3
+  });
+
+  // 66.3.1-T3: Backend root-task filter — parentTaskId: null filter applied to validation query
+  it('66.3.1-T3 — validation findMany uses parentTaskId: null (root tasks only)', async () => {
+    (mockPrisma.taskList.findUnique as jest.Mock).mockResolvedValueOnce(taskList);
+    mockPrisma.task.findMany.mockResolvedValue([]);
+    mockPrisma.$transaction.mockResolvedValue(undefined);
+
+    // With empty root task list, a non-empty orderedIds should fail "incomplete" or "foreign" checks
+    await expect(service.reorderTasks('tl-1', ['some-id'], elevatedActor))
+      .rejects.toThrow(); // foreign or incomplete
+
+    const findManyCall = (mockPrisma.task.findMany as jest.Mock).mock.calls[0][0] as { where: Record<string, unknown> };
+    expect(findManyCall.where).toMatchObject({ taskListId: 'tl-1', parentTaskId: null });
   });
 });

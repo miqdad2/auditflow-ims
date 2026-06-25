@@ -929,9 +929,11 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
     setTasks(newTasks);
     setTaskReorderSaving(true);
     try {
+      // Send only root-task IDs — backend validates against root tasks only (parentTaskId: null).
+      // Subtasks embedded in their parent are ordered within the parent context, not here.
       await apiPatchAuth(
         `/task-lists/${selectedListId}/tasks/reorder`,
-        { orderedIds: newTasks.map((t) => t.id) },
+        { orderedIds: newTasks.filter((t) => t.parentTaskId === null).map((t) => t.id) },
         token,
       );
     } catch {

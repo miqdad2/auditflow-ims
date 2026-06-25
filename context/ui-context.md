@@ -262,7 +262,8 @@ Header:
 
 Main content:
 
-- Task rows
+- Task rows (root tasks only — subtasks rendered inside task detail panel)
+- Drag handle (`⠿`, `ChevronsUp`/`ChevronUp`/`ChevronDown`/`ChevronsDown` icons) — visible only in manual-order / All / no-search mode
 - Assignee pill
 - Status badge
 - Priority badge
@@ -271,6 +272,22 @@ Main content:
 - Subtask count
 - Due date
 - Add task row
+
+### Task Reorder UX
+
+Manual drag-and-drop ordering uses the HTML5 drag API:
+- A `⠿` drag handle column appears at the left of each row when reorder is available.
+- Dragging starts only from the handle cell; clicking the row still opens the task.
+- The dragged row is visually faded (opacity 0.4). The drop target row shows a blue outline.
+- On drop, `performReorder()` is called — one atomic request, optimistic update, instant rollback on failure.
+
+Fallback three-dot menu actions (all four available when applicable):
+- **Move to top** (`ChevronsUp`) — hidden for first row
+- **Move up** (`ChevronUp`) — hidden for first row
+- **Move down** (`ChevronDown`) — hidden for last row
+- **Move to bottom** (`ChevronsDown`) — hidden for last row
+
+Reorder is enabled only when: `taskFilter === 'all'`, `taskSort === 'manual'`, no active search, `canCollaborate`. A hint banner appears for collaborators when any of these conditions is not met.
 
 ### Pages and Sub-Pages Layout
 
