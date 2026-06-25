@@ -204,6 +204,26 @@ Backend authorization is always enforced. `assertWorkspaceAccess` with ALL mode 
 Users with `dashboardExperience = EXECUTIVE` see: Dashboard → ISO Workspaces → Reports → Notifications.
 Technical admin items (Admin Settings, System Health, System Errors) are only shown when the same account separately has SUPER_ADMIN or IT_ADMIN system access roles.
 
+## Workspace Task List Selection Model
+
+The active task list selection is a frontend state variable (`selectedListId`) preserved across all workspace operations.
+
+**Initial selection**: on first workspace load, `selectedListId` is null → fall back to `taskLists[0]?.id`.
+
+**Preservation rule** (applied on every workspace refresh via `loadWorkspace`/`refreshWorkspaceQuiet`):
+```typescript
+setSelectedListId((currentId) => {
+  if (currentId && ws.taskLists.some((tl) => tl.id === currentId)) return currentId;
+  return ws.taskLists[0]?.id ?? null;
+});
+```
+
+**Stable callbacks**: `loadWorkspace`, `refreshWorkspaceQuiet`, `loadTasks`, `debouncedRefreshWorkspace` do NOT capture `selectedListId` in their closure dep arrays. They read current values via `selectedListIdRef.current` (a ref that is updated on every render). This is required because socket event handlers are registered **once** at socket connect time; stale closures would otherwise capture the initial `null` value and reset the selection.
+
+**Stale response guard in `loadTasks`**: after the API responds, `loadTasks` checks `selectedListIdRef.current !== listId` and discards the response if the user switched lists while the request was in flight.
+
+**Background refresh**: `refreshWorkspaceQuiet` does not call `setLoading(true)` — no loading spinner during realtime-triggered workspace refreshes.
+
 ## Task Ordering Model
 
 Tasks within a task list are ordered by `sortOrder` (integer, 0-based). Root tasks and subtasks each have independent `sortOrder` values.

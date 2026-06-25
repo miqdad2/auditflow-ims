@@ -1776,3 +1776,87 @@ describe('TasksService — reorderTasks (Unit 66.3.1 hardening)', () => {
     expect(findManyCall.where).toMatchObject({ taskListId: 'tl-1', parentTaskId: null });
   });
 });
+
+// ─── Unit 66.4 — Task creation uses correct taskListId ────────────────────────
+
+describe('TasksService — create() taskListId targeting (Unit 66.4)', () => {
+  let service: TasksService;
+
+  beforeEach(async () => {
+    jest.resetAllMocks();
+    mockAuditLog.log.mockResolvedValue(undefined);
+    mockNotifications.create.mockResolvedValue(undefined);
+    mockPrisma.activityEvent.create.mockResolvedValue({});
+    mockPrisma.workspace.findUnique.mockResolvedValue(null);
+    mockPrisma.user.findUnique.mockResolvedValue(null);
+    mockWorkspaces.assertWorkspaceAccess.mockResolvedValue(undefined);
+    mockWorkspaces.assertCanBeAssigned.mockResolvedValue(undefined);
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        TasksService,
+        { provide: PrismaService,        useValue: mockPrisma },
+        { provide: AuditLogService,      useValue: mockAuditLog },
+        { provide: NotificationsService, useValue: mockNotifications },
+        { provide: WorkspacesService,    useValue: mockWorkspaces },
+        { provide: RealtimeService,      useValue: mockRealtime },
+      ],
+    }).compile();
+    service = module.get<TasksService>(TasksService);
+  });
+
+  const elevatedActor = {
+    id: 'actor-1',
+    userRoles: [{ role: { name: 'ISO_MANAGER', rolePermissions: [{ permission: { key: 'tasks.create' } }] } }],
+    department: null,
+    departmentId: null,
+  };
+
+  // 66.4-T1: Backend saves task with the exact taskListId provided — not a default or first list
+  it('66.4-T1 — create() persists the provided taskListId (Task 3, not Task 1)', async () => {
+    const task3Id = 'task-list-3-id';
+    const task = makeTask({ taskListId: task3Id });
+    mockPrisma.task.create.mockResolvedValueOnce(task);
+
+    await service.create(
+      { workspaceId: 'ws-1', taskListId: task3Id, title: 'iso34' },
+      elevatedActor.id, ['ISO_MANAGER'], null,
+    );
+
+    const createCall = (mockPrisma.task.create as jest.Mock).mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(createCall.data['taskListId']).toBe(task3Id);
+    expect(createCall.data['taskListId']).not.toBe('task-list-1-id');
+  });
+
+  // 66.4-T2: taskListId from the create request is echoed back in the response
+  it('66.4-T2 — create() response task.taskListId matches the requested task list', async () => {
+    const task3Id = 'task-list-3-id';
+    const created = makeTask({ taskListId: task3Id, title: 'iso34' });
+    mockPrisma.task.create.mockResolvedValueOnce(created);
+
+    const result = await service.create(
+      { workspaceId: 'ws-1', taskListId: task3Id, title: 'iso34' },
+      elevatedActor.id, ['ISO_MANAGER'], null,
+    );
+
+    expect(result.taskListId).toBe(task3Id);
+  });
+
+  // 66.4-T3: Creating with task-list-3 does not alter task-list-1 data
+  it('66.4-T3 — create() only writes to the specified taskListId, no other list is touched', async () => {
+    const task3Id = 'task-list-3-id';
+    const task = makeTask({ taskListId: task3Id });
+    mockPrisma.task.create.mockResolvedValueOnce(task);
+
+    await service.create(
+      { workspaceId: 'ws-1', taskListId: task3Id, title: 'iso34' },
+      elevatedActor.id, ['ISO_MANAGER'], null,
+    );
+
+    // Only one task.create call
+    expect(mockPrisma.task.create).toHaveBeenCalledTimes(1);
+    // No update/delete on other task lists
+    expect(mockPrisma.task.updateMany).not.toHaveBeenCalled();
+    expect(mockPrisma.task.delete).not.toHaveBeenCalled();
+  });
+});

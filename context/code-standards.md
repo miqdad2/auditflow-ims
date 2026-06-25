@@ -108,6 +108,23 @@
 - `DashboardService.getExecutiveSummary()` already accepts and respects `visibilityMode` — no changes needed there.
 - Never hardcode a specific user ID into executive visibility logic. The behavior must work for any future executive user with `workspaceVisibilityMode = 'ALL'`.
 
+## Stable Callback Pattern for Socket Handlers
+
+Socket event handlers in `useWorkspaceSocket` are registered **once** at socket connect time. The `handlers` object is intentionally excluded from the effect's dependency array (see socket-provider.tsx comment). This means handler closures capture their initial values and are never updated on re-render.
+
+**Required pattern** when a handler needs current state that changes over the component lifetime:
+
+1. Use a `useRef` that is assigned on every render:
+   ```typescript
+   const selectedListIdRef = useRef<string | null>(null);
+   selectedListIdRef.current = selectedListId; // updated every render
+   ```
+2. Inside the handler, read `selectedListIdRef.current` instead of `selectedListId`.
+3. For callbacks (loadWorkspace, loadTasks, etc.), remove mutable state from their deps so they are stable and can be safely captured by the initial closure.
+4. For callbacks that read state, use functional updaters (`setState(prev => ...)`) so the update reads the current state at apply time, not the stale closure value.
+
+**Never** add `selectedListId` or `selectedTaskId` to `loadWorkspace` or `loadTasks` deps — this causes unnecessary recreation, stale socket handler closures, and loading spinner disruptions on every state change.
+
 ## Task Reorder Contract
 
 - **DTO**: `ReorderTasksDto` must use `@IsArray() @ArrayNotEmpty() @IsString({ each: true })` decorators. The global `ValidationPipe` uses `{ whitelist: true, forbidNonWhitelisted: true }` — any undecorated property is rejected with HTTP 400 before reaching the service.

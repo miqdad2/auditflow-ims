@@ -179,6 +179,11 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
 
   // Tasks
   const [selectedListId, setSelectedListId] = useState<string | null>(null);
+  // Stable ref — always holds the latest selectedListId without being captured in closures.
+  // Used by socket handlers and stable callbacks that are registered once but need current values.
+  const selectedListIdRef = useRef<string | null>(null);
+  selectedListIdRef.current = selectedListId;
+
   const [tasks, setTasks]           = useState<TaskSummary[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
   const [tasksError, setTasksError]     = useState('');
@@ -192,6 +197,9 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
   const [moveLoading, setMoveLoading]       = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [selectedTaskId, setSelectedTaskId]     = useState<string | null>(null);
+  // Stable ref for selectedTaskId — same pattern as selectedListIdRef
+  const selectedTaskIdRef = useRef<string | null>(null);
+  selectedTaskIdRef.current = selectedTaskId;
   const [taskUpdateKeys, setTaskUpdateKeys]     = useState<Record<string, number>>({});
   const [linkedRecordsUpdateKeys, setLinkedRecordsUpdateKeys] = useState<Record<string, number>>({});
   const [showCreateList, setShowCreateList] = useState(false);
@@ -377,17 +385,42 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
     try {
       const ws = await apiGet<WorkspaceDetail>(`/workspaces/${workspaceId}`, token);
       setWorkspace(ws);
-      if (ws.taskLists.length > 0 && !selectedListId) setSelectedListId(ws.taskLists[0].id);
+      // Preserve the current selection if it still exists; only fall back to the first
+      // list when no valid selection is held. Using the functional form of setSelectedListId
+      // ensures we read the CURRENT state at update time, not a stale closure value.
+      setSelectedListId((currentId) => {
+        if (currentId && ws.taskLists.some((tl) => tl.id === currentId)) return currentId;
+        return ws.taskLists[0]?.id ?? null;
+      });
     } catch (err) {
       if (err instanceof ApiError && (err.statusCode === 403 || err.statusCode === 404)) {
         setAccessDenied(true);
       }
     }
     finally { setLoading(false); }
-  }, [token, workspaceId, selectedListId]);
+  // selectedListId removed from deps: functional setSelectedListId reads current state at update time.
+  // This makes loadWorkspace stable so socket handlers registered once always call the correct version.
+  }, [token, workspaceId]);
+
+  // Background workspace refresh — same selection-preservation logic but no loading spinner.
+  // Used by debouncedRefreshWorkspace and realtime handlers to update counts without disrupting UX.
+  const refreshWorkspaceQuiet = useCallback(async () => {
+    if (!token) return;
+    try {
+      const ws = await apiGet<WorkspaceDetail>(`/workspaces/${workspaceId}`, token);
+      setWorkspace(ws);
+      setSelectedListId((currentId) => {
+        if (currentId && ws.taskLists.some((tl) => tl.id === currentId)) return currentId;
+        return ws.taskLists[0]?.id ?? null;
+      });
+    } catch { /* non-critical: realtime refresh failure is silent */ }
+  }, [token, workspaceId]);
 
   const loadTasks = useCallback(async () => {
-    if (!token || !selectedListId) return;
+    // Read the ref so this stable callback always fetches the CURRENTLY selected list,
+    // even when called from a stale socket handler closure.
+    const listId = selectedListIdRef.current;
+    if (!token || !listId) return;
     setTasksLoading(true);
     setTasksError('');
     try {
@@ -395,15 +428,25 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
       // Policy Option A: workspace members can see all tasks in the list; personal "My Tasks" filter
       // applied client-side as the default view.
       const data = await apiGet<TaskSummary[]>(
-        `/tasks?workspaceId=${workspaceId}&taskListId=${selectedListId}`,
+        `/tasks?workspaceId=${workspaceId}&taskListId=${listId}`,
         token,
       );
-      setTasks(data);
+      // Discard stale responses: if the user switched lists while this request was in flight,
+      // applying the response would show the wrong tasks.
+      if (selectedListIdRef.current !== listId) return;
+      // Root tasks only — subtasks are displayed inside their parent task detail panel.
+      setTasks(data.filter((t) => t.parentTaskId === null));
     } catch (err) {
-      setTasksError(err instanceof Error ? err.message : 'Failed to load tasks.');
+      if (selectedListIdRef.current === listId) {
+        setTasksError(err instanceof Error ? err.message : 'Failed to load tasks.');
+      }
     }
-    finally { setTasksLoading(false); }
-  }, [token, workspaceId, selectedListId]);
+    finally {
+      if (selectedListIdRef.current === listId) setTasksLoading(false);
+    }
+  // selectedListId removed from deps: uses selectedListIdRef.current so the callback is stable.
+  // selectedListId kept in the effect below so the effect still fires on list-click.
+  }, [token, workspaceId]);
 
   const loadMembers = useCallback(async () => {
     if (!token) return;
@@ -441,14 +484,15 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
     finally { setActivityLoading(false); }
   }, [token, workspaceId]);
 
-  // Debounced workspace refresh — prevents N+1 on rapid events (spec Parts 10-12)
+  // Debounced workspace refresh — prevents N+1 on rapid events (spec Parts 10-12).
+  // Uses refreshWorkspaceQuiet (no loading spinner) so the UI is not disrupted during background refresh.
   const debouncedRefreshWorkspace = useCallback(() => {
     if (wsRefreshDebounceRef.current) clearTimeout(wsRefreshDebounceRef.current);
     wsRefreshDebounceRef.current = setTimeout(() => {
-      void loadWorkspace();
+      void refreshWorkspaceQuiet();
       wsRefreshDebounceRef.current = null;
     }, 350);
-  }, [loadWorkspace]);
+  }, [refreshWorkspaceQuiet]);
 
   useEffect(() => { void loadWorkspace(); }, [loadWorkspace]);
   useEffect(() => { if (selectedListId) void loadTasks(); }, [loadTasks, selectedListId]);
@@ -567,13 +611,15 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
       setOverviewStale(true);
       setActivityStale(true); // task update may appear in activity feed
       debouncedRefreshWorkspace(); // keep header chips + Task Summary current
-      if (tid && tid === selectedTaskId) setTaskUpdateKeys((p) => ({ ...p, [tid]: (p[tid] ?? 0) + 1 }));
+      // Use ref so this handler — registered once at socket connect — reads the current task ID
+      if (tid && tid === selectedTaskIdRef.current) setTaskUpdateKeys((p) => ({ ...p, [tid]: (p[tid] ?? 0) + 1 }));
     },
     'task.deleted': (data: Record<string, unknown>) => {
       if (data.workspaceId !== workspaceId) return;
       const tid = data.id as string | undefined;
       if (tid) setTasks((prev) => prev.filter((t) => t.id !== tid));
-      if (tid === selectedTaskId) { setSelectedTaskId(null); showToast('This task was deleted by another user.'); }
+      // Use ref so this handler reads the current selected task even with a stale closure
+      if (tid === selectedTaskIdRef.current) { setSelectedTaskId(null); showToast('This task was deleted by another user.'); }
       setOverviewStale(true);
       debouncedRefreshWorkspace();
     },
@@ -596,7 +642,8 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
     },
     'comment.created': (data: Record<string, unknown>) => {
       const taskId = data.taskId as string | undefined;
-      if (taskId && taskId === selectedTaskId) {
+      // Use ref so registered-once handler reads the currently open task, not the initial value
+      if (taskId && taskId === selectedTaskIdRef.current) {
         setTaskUpdateKeys((p) => ({ ...p, [taskId]: (p[taskId] ?? 0) + 1 }));
       }
     },
@@ -628,30 +675,33 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
     },
     'linked_record.created': (data: Record<string, unknown>) => {
       const sourceId = data.sourceId as string | undefined;
-      if (sourceId && sourceId === selectedTaskId) {
+      if (sourceId && sourceId === selectedTaskIdRef.current) {
         setLinkedRecordsUpdateKeys((p) => ({ ...p, [sourceId]: (p[sourceId] ?? 0) + 1 }));
         showToast('Linked records updated by another user');
       }
     },
     'linked_record.deleted': (data: Record<string, unknown>) => {
       const sourceId = data.sourceId as string | undefined;
-      if (sourceId && sourceId === selectedTaskId) {
+      if (sourceId && sourceId === selectedTaskIdRef.current) {
         setLinkedRecordsUpdateKeys((p) => ({ ...p, [sourceId]: (p[sourceId] ?? 0) + 1 }));
         showToast('A linked record was removed by another user');
       }
     },
-    // Reorder events: reload workspace to get updated sort orders, then reset local override
+    // Reorder events: quiet refresh preserves selection; no loading spinner
     'task_list.reordered': () => {
       setLocalListOrder(null); // clear local override so fresh workspace data takes effect
-      void loadWorkspace();
+      void refreshWorkspaceQuiet();
     },
     'task.reordered': (data: Record<string, unknown>) => {
-      // If the reordered list is the currently selected one, reload tasks
-      if ((data.taskListId as string | undefined) === selectedListId) {
+      // Use ref so this check works even with a stale socket handler closure
+      if ((data.taskListId as string | undefined) === selectedListIdRef.current) {
         void loadTasks();
       }
     },
-  }), [workspaceId, selectedTaskId, selectedListId, loadTasks, loadMembers, loadWorkspace, debouncedRefreshWorkspace, showToast, router]);
+  // Refs (selectedListIdRef, selectedTaskIdRef) are captured once and always hold current values.
+  // loadTasks, debouncedRefreshWorkspace, refreshWorkspaceQuiet are stable (no selectedListId dep).
+  // Removing selectedListId/selectedTaskId/loadWorkspace from deps since they're handled via refs/stable fns.
+  }), [workspaceId, loadTasks, loadMembers, refreshWorkspaceQuiet, debouncedRefreshWorkspace, showToast, router]);
 
   useWorkspaceSocket(workspaceId, socketHandlers, () => {
     // On socket reconnect: if on overview tab, refresh immediately; otherwise mark stale

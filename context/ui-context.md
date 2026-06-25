@@ -273,6 +273,16 @@ Main content:
 - Due date
 - Add task row
 
+### Active Task List Selection Rule
+
+The selected task list is preserved across all workspace operations. Selection changes only occur when:
+- **No list has ever been selected** (initial workspace load): fall back to the first available list.
+- **The selected list was deleted**: fall back to the next available list.
+- **The workspace changed**: reset selection for the new workspace.
+- **User explicitly clicks a different list**: switch to that list.
+
+**Never reset the selection** on background refresh, realtime events, task creation, task updates, or task reorder. The authoritative rule is implemented via functional `setSelectedListId((currentId) => ...)` in `loadWorkspace` / `refreshWorkspaceQuiet`: if `currentId` exists and is still in the refreshed task list array, return `currentId`; otherwise fall back to `taskLists[0]?.id`.
+
 ### Task Reorder UX
 
 Manual drag-and-drop ordering uses the HTML5 drag API:
