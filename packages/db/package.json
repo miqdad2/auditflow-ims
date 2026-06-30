@@ -2,7 +2,7 @@
   "name": "@auditflow/db",
   "version": "0.0.1",
   "private": true,
-  "description": "Prisma schema, migrations, and database client for RECAFCO AuditFlow IMS",
+  "description": "Prisma schema, migrations, and database client for RECAFCO AuditFlow ISO",
   "scripts": {
     "db:generate": "prisma generate --schema=prisma/schema.prisma",
     "db:migrate": "prisma migrate dev",

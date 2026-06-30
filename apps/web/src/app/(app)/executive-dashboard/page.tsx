@@ -522,7 +522,7 @@ export default function ExecutiveDashboardPage() {
             <div className="min-w-0">
               <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                 <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
-                  RECAFCO AuditFlow IMS
+                  RECAFCO AuditFlow ISO
                 </span>
                 <span
                   className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold"

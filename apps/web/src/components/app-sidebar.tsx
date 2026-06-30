@@ -141,7 +141,7 @@ export function AppSidebar() {
         href={dashboardHref}
         className="flex h-16 shrink-0 items-center gap-3 px-4 transition-opacity hover:opacity-90"
         style={{ borderBottom: '1px solid rgba(255,255,255,0.10)' }}
-        aria-label="AuditFlow IMS home"
+        aria-label="AuditFlow ISO home"
       >
         <div
           className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md p-1.5"
@@ -176,7 +176,7 @@ export function AppSidebar() {
             className="truncate text-base font-semibold leading-tight"
             style={{ color: 'var(--sidebar-text)' }}
           >
-            AuditFlow IMS
+            AuditFlow ISO
           </p>
           <p className="truncate text-xs leading-tight" style={{ color: 'var(--brand-red)' }}>
             RECAFCO

@@ -1,4 +1,4 @@
-# Company Server Update Procedure — AuditFlow IMS
+# Company Server Update Procedure — AuditFlow ISO
 
 Release: auditflow-ims-2026-06-24-r3  
 Commit: 7cfddfa  

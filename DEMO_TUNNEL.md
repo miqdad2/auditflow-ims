@@ -1,4 +1,4 @@
-# RECAFCO AuditFlow IMS — Live Demo via ngrok Tunnel
+# RECAFCO AuditFlow ISO — Live Demo via ngrok Tunnel
 
 Use this guide to expose the local app to a presentation-room computer via ngrok.
 Nothing is deployed. The database stays local. All data is yours.
@@ -40,7 +40,7 @@ Open Terminal 1:
 pnpm --filter api start:dev
 ```
 
-Wait for: `RECAFCO AuditFlow IMS API running on http://localhost:4000`
+Wait for: `RECAFCO AuditFlow ISO API running on http://localhost:4000`
 
 ---
 

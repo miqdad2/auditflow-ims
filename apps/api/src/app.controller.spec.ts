@@ -3,8 +3,8 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
 const mockAppService = {
-  getHealth: () => ({ status: 'ok', service: 'RECAFCO AuditFlow IMS API' }),
-  getFullHealth: () => Promise.resolve({ status: 'ok', service: 'RECAFCO AuditFlow IMS API' }),
+  getHealth: () => ({ status: 'ok', service: 'RECAFCO AuditFlow ISO API' }),
+  getFullHealth: () => Promise.resolve({ status: 'ok', service: 'RECAFCO AuditFlow ISO API' }),
   getDatabaseHealth: () => Promise.resolve({ status: 'ok' }),
   getStorageHealth: () => ({ status: 'ok' }),
 };
@@ -25,7 +25,7 @@ describe('AppController', () => {
     it('should return health status', async () => {
       const result = await appController.getHealth();
       expect(result.status).toBe('ok');
-      expect(result.service).toBe('RECAFCO AuditFlow IMS API');
+      expect(result.service).toBe('RECAFCO AuditFlow ISO API');
     });
   });
 });

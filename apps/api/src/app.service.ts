@@ -14,7 +14,7 @@ export class AppService {
   getHealth() {
     return {
       status: 'ok',
-      service: 'RECAFCO AuditFlow IMS API',
+      service: 'RECAFCO AuditFlow ISO API',
       version: '1.0.0',
       timestamp: new Date().toISOString(),
     };
@@ -67,7 +67,7 @@ export class AppService {
 
     return {
       status: allOk ? 'ok' : 'degraded',
-      service: 'RECAFCO AuditFlow IMS API',
+      service: 'RECAFCO AuditFlow ISO API',
       version: '1.0.0',
       timestamp: new Date().toISOString(),
       checks: {

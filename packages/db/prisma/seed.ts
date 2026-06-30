@@ -218,7 +218,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
 // ─── Seed runner ──────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log('🌱 Seeding RECAFCO AuditFlow IMS database...\n');
+  console.log('🌱 Seeding RECAFCO AuditFlow ISO database...\n');
 
   // Departments
   console.log('→ Departments...');

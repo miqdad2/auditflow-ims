@@ -2,7 +2,7 @@
 
 ## Application Building Context
 
-This project is **RECAFCO AuditFlow IMS** — an internal ISO Audit Readiness, Document Control, Task Management, Evidence Tracking, and NCR/CAPA system for RECAFCO.
+This project is **RECAFCO AuditFlow ISO** — an internal ISO Audit Readiness, Document Control, Task Management, Evidence Tracking, and NCR/CAPA system for RECAFCO.
 
 The system is inspired by Teamwork-style project management, but it must **not** become a generic Teamwork clone. It must be built specifically for ISO/QHSE audit readiness, document control, evidence submission, approval/rejection, audit checklist tracking, corrective actions, notifications, reminders, and dashboards.
 
@@ -12,9 +12,9 @@ The immediate target is a **production-ready 3-day MVP** that can be deployed lo
 
 Company name: **RECAFCO**
 Company website: `https://recafco.com/`
-System name: **AuditFlow IMS**
-Full product name: **RECAFCO AuditFlow IMS**
-Tagline: **Internal ISO & QHSE Audit Readiness System**
+System name: **AuditFlow ISO**
+Full product name: **RECAFCO AuditFlow ISO**
+Tagline: **Internal ISO Audit System**
 
 Use the RECAFCO company logo throughout the application where appropriate:
 
@@ -339,7 +339,7 @@ If build fails, fix the root cause before moving to the next unit.
 
 ## Final Reminder
 
-RECAFCO AuditFlow IMS is being built for a real company ISO audit timeline.
+RECAFCO AuditFlow ISO is being built for a real company ISO audit timeline.
 
 Prioritize:
 

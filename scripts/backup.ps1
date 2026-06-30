@@ -1,4 +1,4 @@
-# RECAFCO AuditFlow IMS — Windows Backup Script
+# RECAFCO AuditFlow ISO — Windows Backup Script
 # Backs up the PostgreSQL database and the uploads folder.
 # Run this script manually or schedule it with Windows Task Scheduler.
 #

@@ -89,10 +89,10 @@ export default function LoginPage() {
               className="text-lg font-semibold"
               style={{ color: 'var(--text-primary)' }}
             >
-              RECAFCO AuditFlow IMS
+              RECAFCO AuditFlow ISO
             </h1>
             <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-              Internal ISO &amp; QHSE Audit Readiness System
+              Internal ISO Audit System
             </p>
           </div>
         </div>

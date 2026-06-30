@@ -19,6 +19,6 @@ async function bootstrap() {
 
   const port = parseInt(process.env.PORT ?? '4000', 10);
   await app.listen(port);
-  console.log(`RECAFCO AuditFlow IMS API running on http://localhost:${port}`);
+  console.log(`RECAFCO AuditFlow ISO API running on http://localhost:${port}`);
 }
 bootstrap();

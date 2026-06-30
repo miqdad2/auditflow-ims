@@ -51,7 +51,7 @@ export function showDesktopNotification(
   if (!showWhenFocused && typeof document !== 'undefined' && document.hasFocus()) return;
 
   try {
-    const notif = new Notification(`AuditFlow IMS — ${opts.title}`, {
+    const notif = new Notification(`AuditFlow ISO — ${opts.title}`, {
       body: opts.body,
       tag:  opts.tag,
       // icon intentionally omitted — avoids needing a separate icon asset

@@ -1,4 +1,4 @@
-# Rollback Procedure — AuditFlow IMS
+# Rollback Procedure — AuditFlow ISO
 
 Release: auditflow-ims-2026-06-24-r3
 Previous stable release: auditflow-ims-2026-06-22-r1 (commit 994d993)

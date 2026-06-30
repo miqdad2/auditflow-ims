@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RECAFCO AuditFlow IMS — Linux/Server Backup Script
+# RECAFCO AuditFlow ISO — Linux/Server Backup Script
 # Backs up the PostgreSQL database and the uploads folder.
 # Run manually or schedule with cron.
 #

@@ -141,9 +141,9 @@ Update this file after every meaningful implementation change.
 
 ## Current Goal
 
-Build a production-ready 3-day MVP for **RECAFCO AuditFlow IMS**.
+Build a production-ready 3-day MVP for **RECAFCO AuditFlow ISO**.
 
-AuditFlow IMS is an internal ISO Audit Readiness, Document Control, Task Management, Evidence Tracking, and NCR/CAPA system for RECAFCO.
+RECAFCO AuditFlow ISO is an internal ISO Audit Readiness, Document Control, Task Management, Evidence Tracking, and NCR/CAPA system for RECAFCO.
 
 The immediate goal is to prepare a usable internal system for ISO audit readiness, with strong focus on:
 
@@ -3689,6 +3689,6 @@ Extended workspace visibility enforcement from the core workspace/task modules t
 - PostgreSQL is confirmed as the database.
 - Actual uploaded files should be stored in local file storage first, not inside PostgreSQL.
 - Company logo will be provided and should be used in the UI.
-- Formal product name: **RECAFCO AuditFlow IMS**.
-- Short product name: **AuditFlow IMS**.
-- Tagline: **Internal ISO & QHSE Audit Readiness System**.
+- Formal product name: **RECAFCO AuditFlow ISO**.
+- Short product name: **AuditFlow ISO**.
+- Tagline: **Internal ISO Audit System**.

@@ -1,4 +1,4 @@
-# RECAFCO AuditFlow IMS — Deployment Guide
+# RECAFCO AuditFlow ISO — Deployment Guide
 
 Internal deployment reference for the RECAFCO IT team.
 
@@ -342,5 +342,5 @@ Then restart the API.
 
 ---
 
-*RECAFCO AuditFlow IMS — Internal Use Only*
+*RECAFCO AuditFlow ISO — Internal Use Only*
 *Prepared for RECAFCO IT Team*

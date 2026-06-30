@@ -1,4 +1,4 @@
-# Post-Deployment Smoke Test — AuditFlow IMS
+# Post-Deployment Smoke Test — AuditFlow ISO
 
 Generated: 2026-06-22  
 Release: auditflow-ims-2026-06-22-r1  

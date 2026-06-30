@@ -2,7 +2,7 @@
 
 ## Theme
 
-The UI must feel like a professional internal enterprise workspace for **RECAFCO AuditFlow IMS**.
+The UI must feel like a professional internal enterprise workspace for **RECAFCO AuditFlow ISO**.
 
 This is not a public SaaS product and must not look like an AI-generated dashboard. It is an internal ISO/QHSE audit readiness, document control, task management, evidence tracking, and NCR/CAPA system for RECAFCO staff.
 
@@ -18,15 +18,15 @@ The application is branded for RECAFCO.
 
 - Company name: RECAFCO
 - Company website: https://recafco.com/
-- Full system name: RECAFCO AuditFlow IMS
-- Short system name: AuditFlow IMS
-- Tagline: Internal ISO & QHSE Audit Readiness System
+- Full system name: RECAFCO AuditFlow ISO
+- Short system name: AuditFlow ISO
+- Tagline: Internal ISO Audit System
 - Company logo path: `apps/web/public/brand/recafco-logo.png`
 
 Logo usage:
 
 - Login page: large RECAFCO logo above system name
-- Sidebar: compact RECAFCO logo with `AuditFlow IMS`
+- Sidebar: compact RECAFCO logo with `AuditFlow ISO`
 - App header: optional small logo or text identity
 - Loading screen: centered logo with system name
 - Empty states: logo may be used lightly, but do not overuse it
@@ -160,7 +160,7 @@ The main authenticated app should use a professional enterprise workspace layout
 Contains:
 
 - RECAFCO logo
-- AuditFlow IMS short name
+- AuditFlow ISO short name
 - Dashboard
 - ISO Workspaces
 - Tasks

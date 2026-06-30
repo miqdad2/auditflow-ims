@@ -1,5 +1,5 @@
 /**
- * RECAFCO AuditFlow IMS — Demo Data Seed
+ * RECAFCO AuditFlow ISO — Demo Data Seed
  *
  * Run AFTER the main seed:
  *   cd packages/db
@@ -106,7 +106,7 @@ const DEMO_USERS = [
 ];
 
 async function main() {
-  console.log('\n🎬 Seeding RECAFCO AuditFlow IMS demo data...\n');
+  console.log('\n🎬 Seeding RECAFCO AuditFlow ISO demo data...\n');
 
   // ── 1. Departments (ensure they exist) ───────────────────────────────────
 
@@ -336,7 +336,7 @@ async function main() {
       data: {
         workspaceId: wsId,
         title: '[SAMPLE] IMS Overview',
-        content: `# ISO Management System Overview\n\nThis page is sample content for the RECAFCO AuditFlow IMS demo.\n\n## Scope\nThis integrated management system covers ISO 9001:2015 (Quality), ISO 45001 (Safety), and ISO 14001 (Environment).\n\n## Key Contacts\n- ISO Manager: Ahmed Al-Rashidi\n- QHSE Lead: Sara Al-Mansoori\n\n## Audit Schedule\nInternal audit planned for Q3 2026.\n\n> Note: This is sample data for demonstration purposes only.`,
+        content: `# ISO Management System Overview\n\nThis page is sample content for the RECAFCO AuditFlow ISO demo.\n\n## Scope\nThis integrated management system covers ISO 9001:2015 (Quality), ISO 45001 (Safety), and ISO 14001 (Environment).\n\n## Key Contacts\n- ISO Manager: Ahmed Al-Rashidi\n- QHSE Lead: Sara Al-Mansoori\n\n## Audit Schedule\nInternal audit planned for Q3 2026.\n\n> Note: This is sample data for demonstration purposes only.`,
         isHome: true,
         sortOrder: 1,
         createdById: isoManagerId,
@@ -645,7 +645,7 @@ async function main() {
       verifiedById: isoManagerId,
       rootCause: 'Calibration tracking spreadsheet was not updated after instrument service. No formal calibration scheduling system in place.',
       correctiveAction: 'All calibration certificates collected and filed. New calibration register created with due date tracking.',
-      preventiveAction: 'Monthly calibration status review meeting scheduled. Calibration items added to AuditFlow IMS checklist.',
+      preventiveAction: 'Monthly calibration status review meeting scheduled. Calibration items added to AuditFlow ISO checklist.',
       dueDate: daysAgo(5),
       verifiedAt: daysAgo(1),
     },
@@ -684,7 +684,7 @@ async function main() {
     {
       ncrNumber: 'CAP-2026-001',
       title: '[SAMPLE] Implement Document Control System',
-      description: 'Previous audits noted absence of a formal document control system. AuditFlow IMS is the corrective action to address this finding.',
+      description: 'Previous audits noted absence of a formal document control system. AuditFlow ISO is the corrective action to address this finding.',
       type: 'CAPA',
       severity: 'CRITICAL',
       status: 'CLOSED',
@@ -695,7 +695,7 @@ async function main() {
       verifiedById: isoManagerId,
       closedById: isoManagerId,
       rootCause: 'No centralized document management system existed. Documents were stored on shared drives without version control.',
-      correctiveAction: 'RECAFCO AuditFlow IMS deployed. All ISO documents migrated to controlled document library.',
+      correctiveAction: 'RECAFCO AuditFlow ISO deployed. All ISO documents migrated to controlled document library.',
       preventiveAction: 'Quarterly document library review scheduled. All document uploads require category and department assignment.',
       dueDate: daysAgo(10),
       verifiedAt: daysAgo(5),

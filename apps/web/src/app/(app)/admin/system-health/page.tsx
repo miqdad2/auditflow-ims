@@ -155,7 +155,7 @@ export default function SystemHealthPage() {
         <div>
           <h1 className="text-xl font-semibold" style={{ color: 'var(--text-primary)' }}>System Health</h1>
           <p className="mt-0.5 text-sm" style={{ color: 'var(--text-muted)' }}>
-            Real-time status of RECAFCO AuditFlow IMS infrastructure
+            Real-time status of RECAFCO AuditFlow ISO infrastructure
           </p>
         </div>
         <button

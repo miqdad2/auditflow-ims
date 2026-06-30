@@ -6,7 +6,7 @@ Build this project incrementally using a spec-driven workflow.
 
 The context files define what to build, how to build it, what the UI should look like, and the current implementation state. Always implement against these specs. Do not infer, invent, or silently change business behavior without updating the relevant context file.
 
-This project is **RECAFCO AuditFlow IMS**, an internal ISO Audit Readiness & Document Control System for RECAFCO. The immediate goal is a production-ready MVP within 3 days for ISO audit preparation. Prioritize reliability, traceability, upload workflow, document control, audit checklist, task management, notifications, and dashboard visibility.
+This project is **RECAFCO AuditFlow ISO**, an internal ISO Audit Readiness & Document Control System for RECAFCO. The immediate goal is a production-ready MVP within 3 days for ISO audit preparation. Prioritize reliability, traceability, upload workflow, document control, audit checklist, task management, notifications, and dashboard visibility.
 
 ## Primary Rule
 
@@ -150,4 +150,4 @@ The project must be:
 - Clear enough for another developer or AI coding agent to resume.
 - Professional enough to show IT manager and management.
 - Focused enough to be completed within the 3-day MVP window.
-- Consistently branded as RECAFCO AuditFlow IMS.
+- Consistently branded as RECAFCO AuditFlow ISO.

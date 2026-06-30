@@ -1,4 +1,4 @@
-// RECAFCO AuditFlow IMS — Prisma Schema
+// RECAFCO AuditFlow ISO — Prisma Schema
 // Prisma 7: datasource URL is configured in prisma.config.ts (for migrations)
 // and passed via PrismaClient constructor at runtime.
 // NOTE: Schema changes in dev applied via `prisma db push` (migrate reset blocked in AI session).

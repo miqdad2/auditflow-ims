@@ -1,8 +1,8 @@
-# RECAFCO AuditFlow IMS
+# RECAFCO AuditFlow ISO
 
 ## Overview
 
-RECAFCO AuditFlow IMS is an internal ISO Audit Readiness, Document Control, Task Management, Evidence Tracking, and NCR/CAPA system for RECAFCO.
+RECAFCO AuditFlow ISO is an internal ISO Audit Readiness, Document Control, Task Management, Evidence Tracking, and NCR/CAPA system for RECAFCO.
 
 The system is for internal company use only. It is inspired by Teamwork-style project management, but customized for RECAFCO’s ISO/QHSE audit preparation, department-wise document control, audit evidence tracking, corrective actions, reminders, approvals, and internal collaboration.
 
@@ -12,9 +12,9 @@ It helps responsible staff, department users, ISO/QHSE users, managers, and audi
 
 - Company name: **RECAFCO**
 - Company website: `https://recafco.com/`
-- Full system name: **RECAFCO AuditFlow IMS**
-- Short system name: **AuditFlow IMS**
-- Tagline: **Internal ISO & QHSE Audit Readiness System**
+- Full system name: **RECAFCO AuditFlow ISO**
+- Short system name: **AuditFlow ISO**
+- Tagline: **Internal ISO Audit System**
 - Logo path: `apps/web/public/brand/recafco-logo.png`
 
 ## Goals

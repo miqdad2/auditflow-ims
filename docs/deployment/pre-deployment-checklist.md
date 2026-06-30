@@ -1,4 +1,4 @@
-# Pre-Deployment Checklist — AuditFlow IMS
+# Pre-Deployment Checklist — AuditFlow ISO
 
 Release: auditflow-ims-2026-06-24-r3
 Commit: 7cfddfa

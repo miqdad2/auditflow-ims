@@ -923,7 +923,7 @@ export default function ReportsPage() {
           {/* ── Print-only header (hidden on screen, visible in print) ─── */}
           <div className="hidden print:block rounded-xl border p-4 text-xs" style={{ borderColor: 'var(--border-default)' }}>
             <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>
-              RECAFCO AuditFlow IMS — Operations &amp; Compliance Report
+              RECAFCO AuditFlow ISO — Operations &amp; Compliance Report
             </p>
             <p style={{ color: 'var(--text-secondary)' }}>
               Reporting period: {fmtDate(dateFrom)} – {fmtDate(dateTo)}
@@ -937,7 +937,7 @@ export default function ReportsPage() {
 
           {/* ── Footer ────────────────────────────────────────────────────── */}
           <p className="text-xs text-center print:hidden" style={{ color: 'var(--text-disabled)' }}>
-            RECAFCO AuditFlow IMS · Internal Use Only · Generated {new Date(data.generatedAt).toLocaleString('en-GB')}
+            RECAFCO AuditFlow ISO · Internal Use Only · Generated {new Date(data.generatedAt).toLocaleString('en-GB')}
             {(deptFilter || wsFilter) && ' · Filtered view'}
           </p>
         </>

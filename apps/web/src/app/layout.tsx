@@ -4,10 +4,10 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: {
-    default: "RECAFCO AuditFlow IMS",
-    template: "%s | RECAFCO AuditFlow IMS",
+    default: "RECAFCO AuditFlow ISO",
+    template: "%s | RECAFCO AuditFlow ISO",
   },
-  description: "Internal ISO & QHSE Audit Readiness System for RECAFCO",
+  description: "Internal ISO Audit System for RECAFCO",
 };
 
 export default function RootLayout({

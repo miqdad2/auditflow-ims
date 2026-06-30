@@ -1,4 +1,4 @@
-# Production Pre-Flight Checklist — AuditFlow IMS
+# Production Pre-Flight Checklist — AuditFlow ISO
 
 Release: auditflow-ims-2026-06-24-r3  
 Commit: 7cfddfa (HEAD — all Unit 63.x through 65.6 changes committed)

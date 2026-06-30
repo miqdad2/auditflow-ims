@@ -1,8 +1,8 @@
 # Caddy WebSocket Proxy — Socket.IO Configuration and Production Connection Model
 
-## Required for AuditFlow IMS Realtime
+## Required for AuditFlow ISO Realtime
 
-AuditFlow IMS uses Socket.IO for live realtime synchronization across:
+AuditFlow ISO uses Socket.IO for live realtime synchronization across:
 
 - Dashboard auto-refresh (elevated users)
 - Workspace task/document/issue/member updates

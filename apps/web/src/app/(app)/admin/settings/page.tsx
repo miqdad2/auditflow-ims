@@ -116,10 +116,10 @@ export default function AdminSettingsPage() {
               <div className="rounded-2xl p-6" style={{ backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-default)' }}>
                 <h2 className="mb-4 text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Application Identity</h2>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <InfoRow label="System Name" value="AuditFlow IMS" />
+                  <InfoRow label="System Name" value="AuditFlow ISO" />
                   <InfoRow label="Organization" value="RECAFCO" />
-                  <InfoRow label="Full Product Name" value="RECAFCO AuditFlow IMS" />
-                  <InfoRow label="Purpose" value="Internal ISO & QHSE Audit Readiness System" />
+                  <InfoRow label="Full Product Name" value="RECAFCO AuditFlow ISO" />
+                  <InfoRow label="Purpose" value="Internal ISO Audit System" />
                   <InfoRow label="Phase" value="Phase 1 — MVP" />
                   <InfoRow label="Language" value="English" />
                 </div>
