@@ -524,6 +524,10 @@ export default function DashboardPage() {
             icon={CalendarDays}
             urgent={(taskFileSummary?.expired ?? 0) > 0}
             warning={(taskFileSummary?.expiringSoon ?? 0) > 0 && (taskFileSummary?.expired ?? 0) === 0}
+            // Only link users who actually have Action Center access (SUPER_ROLES) — ISO_MANAGER/
+            // QHSE_USER see this card too but would hit Access Denied on /action-center; no change
+            // to who can access it, just avoid linking to a page they'd be denied.
+            href={isSuperRole ? '/action-center?type=EXPIRY' : undefined}
           />
         </div>
 

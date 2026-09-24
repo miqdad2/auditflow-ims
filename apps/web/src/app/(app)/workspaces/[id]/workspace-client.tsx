@@ -164,6 +164,11 @@ const EXPIRY_RANK: Record<FileExpiryStatus, number> = {
   EXPIRED: 0, EXPIRING_SOON: 1, VALID: 2, MISSING_EXPIRY_DATE: 3,
 };
 
+// Sentinel for selectedListId meaning "every task list in this workspace" — distinct from
+// the real `null` transient-state used before a workspace has finished loading. Truthy, so
+// existing `if (listId)`/`if (selectedListId)` guards keep working unmodified.
+const ALL_LISTS_ID = '__ALL__';
+
 export interface WorkspaceClientProps { params: Promise<{ id: string }>; }
 
 export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) {
@@ -200,6 +205,10 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
   // Expiry review — independent filter dimension for task-linked file expiry (separate from Due Date)
   const [expiryFilter, setExpiryFilter] = useState<ExpiryFilter>('all');
   const [showExpiryBanner, setShowExpiryBanner] = useState(false);
+  // Task-list breakdown chip sub-filter — only meaningful when selectedListId === ALL_LISTS_ID.
+  // null = no sub-filter (show all lists' matches). Purely client-side over the already-loaded
+  // all-lists dataset — never triggers a refetch, so counts always match visible rows.
+  const [expiryListScope, setExpiryListScope] = useState<string | null>(null);
   const [createTaskInitialTitle, setCreateTaskInitialTitle] = useState<string | undefined>(undefined);
   const [openMenuId, setOpenMenuId]         = useState<string | null>(null);
   const [moveTaskId, setMoveTaskId]         = useState<string | null>(null);
@@ -399,7 +408,7 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
       // list when no valid selection is held. Using the functional form of setSelectedListId
       // ensures we read the CURRENT state at update time, not a stale closure value.
       setSelectedListId((currentId) => {
-        if (currentId && ws.taskLists.some((tl) => tl.id === currentId)) return currentId;
+        if (currentId && (currentId === ALL_LISTS_ID || ws.taskLists.some((tl) => tl.id === currentId))) return currentId;
         return ws.taskLists[0]?.id ?? null;
       });
     } catch (err) {
@@ -420,7 +429,7 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
       const ws = await apiGet<WorkspaceDetail>(`/workspaces/${workspaceId}`, token);
       setWorkspace(ws);
       setSelectedListId((currentId) => {
-        if (currentId && ws.taskLists.some((tl) => tl.id === currentId)) return currentId;
+        if (currentId && (currentId === ALL_LISTS_ID || ws.taskLists.some((tl) => tl.id === currentId))) return currentId;
         return ws.taskLists[0]?.id ?? null;
       });
     } catch { /* non-critical: realtime refresh failure is silent */ }
@@ -437,8 +446,11 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
       // Include workspaceId so the backend applies workspace-access checks (not the global STAFF filter).
       // Policy Option A: workspace members can see all tasks in the list; personal "My Tasks" filter
       // applied client-side as the default view.
+      // ALL_LISTS_ID omits taskListId entirely — the backend already returns every root task
+      // across all lists in the workspace when taskListId is not provided.
+      const listQuery = listId === ALL_LISTS_ID ? '' : `&taskListId=${listId}`;
       const data = await apiGet<TaskSummary[]>(
-        `/tasks?workspaceId=${workspaceId}&taskListId=${listId}`,
+        `/tasks?workspaceId=${workspaceId}${listQuery}`,
         token,
       );
       // Discard stale responses: if the user switched lists while this request was in flight,
@@ -550,7 +562,7 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
   }, [activeTab]);
 
   // Reorder is only available when the full unfiltered manual-order list is visible
-  const isReorderEnabled = canCollaborate && taskFilter === 'all' && !taskSearch.trim() && taskSort === 'manual' && expiryFilter === 'all';
+  const isReorderEnabled = canCollaborate && taskFilter === 'all' && !taskSearch.trim() && taskSort === 'manual' && expiryFilter === 'all' && selectedListId !== ALL_LISTS_ID;
 
   // ── Filtered tasks ────────────────────────────────────────────────────────────
 
@@ -569,6 +581,8 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
     if (expiryFilter === 'expired')       list = list.filter((t) => t.fileExpiry?.status === 'EXPIRED');
     if (expiryFilter === 'expiring_soon') list = list.filter((t) => t.fileExpiry?.status === 'EXPIRING_SOON');
     if (expiryFilter === 'missing')       list = list.filter((t) => t.fileExpiry?.status === 'MISSING_EXPIRY_DATE');
+    // Breakdown-chip sub-filter — only applies in All Lists mode with an expiry filter active
+    if (selectedListId === ALL_LISTS_ID && expiryListScope) list = list.filter((t) => t.taskList.id === expiryListScope);
     if (taskSearch.trim()) list = list.filter((t) => t.title.toLowerCase().includes(taskSearch.toLowerCase()));
     // Apply sort — manual = preserve sortOrder from backend
     if (taskSort === 'newest-created')   return [...list].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -582,13 +596,33 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
       return (a.fileExpiry?.daysLeft ?? Infinity) - (b.fileExpiry?.daysLeft ?? Infinity);
     });
     return list;
-  }, [tasks, taskFilter, taskSearch, taskSort, expiryFilter, user?.id]);
+  }, [tasks, taskFilter, taskSearch, taskSort, expiryFilter, selectedListId, expiryListScope, user?.id]);
 
   function expiryFilterCount(f: Exclude<ExpiryFilter, 'all'>) {
     if (f === 'expired')        return tasks.filter((t) => t.fileExpiry?.status === 'EXPIRED').length;
     if (f === 'expiring_soon')  return tasks.filter((t) => t.fileExpiry?.status === 'EXPIRING_SOON').length;
     return tasks.filter((t) => t.fileExpiry?.status === 'MISSING_EXPIRY_DATE').length;
   }
+
+  // Task-list breakdown for the expiry review chips (req. #8) — purely client-side over the
+  // already-loaded All Lists dataset, so counts always match what's actually rendered (req. #6).
+  const expiryListBreakdown = useMemo(() => {
+    if (selectedListId !== ALL_LISTS_ID || expiryFilter === 'all') return [];
+    const statusMatch = (t: TaskSummary) =>
+      expiryFilter === 'expired' ? t.fileExpiry?.status === 'EXPIRED' :
+      expiryFilter === 'expiring_soon' ? t.fileExpiry?.status === 'EXPIRING_SOON' :
+      t.fileExpiry?.status === 'MISSING_EXPIRY_DATE';
+    const counts = new Map<string, { name: string; count: number }>();
+    for (const t of tasks) {
+      if (!statusMatch(t)) continue;
+      const entry = counts.get(t.taskList.id) ?? { name: t.taskList.name, count: 0 };
+      entry.count += 1;
+      counts.set(t.taskList.id, entry);
+    }
+    return Array.from(counts.entries())
+      .map(([id, v]) => ({ id, name: v.name, count: v.count }))
+      .sort((a, b) => b.count - a.count);
+  }, [tasks, selectedListId, expiryFilter]);
 
   function filterCount(f: TaskFilter) {
     const now = nowRef.current;
@@ -1097,10 +1131,14 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
   }
 
   // Root-cause fix for the Workspace Status "Review" action and the "Files" summary chip:
-  // both previously just switched tabs with no filter applied. This single helper wires
-  // navigation + expiry filter + urgency sort + explanation banner together (req. #10).
+  // both previously just switched tabs with no filter applied — and even then, the Tasks tab
+  // stayed scoped to whichever single task list happened to be selected (often the first list),
+  // so a workspace-wide "18 files expired" could show 0 results. Forcing ALL_LISTS_ID here is
+  // what actually fixes the mismatch — expiry filter/sort/banner alone were not enough.
   function openExpiryReview(status: 'expired' | 'expiring_soon') {
     setActiveTab('tasks');
+    setSelectedListId(ALL_LISTS_ID);
+    setExpiryListScope(null);
     setExpiryFilter(status);
     setTaskSort('expiry-urgency');
     setShowExpiryBanner(true);
@@ -2429,6 +2467,24 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
               )}
             </div>
             <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-2">
+              {/* All Lists — shows tasks/expiry across every list in this workspace (req. #4) */}
+              {displayedTaskLists.length > 0 && (
+                <button type="button" onClick={() => setSelectedListId(ALL_LISTS_ID)}
+                  className="mb-1 flex items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors"
+                  style={{
+                    backgroundColor: selectedListId === ALL_LISTS_ID ? 'var(--accent-soft)' : 'transparent',
+                    color: selectedListId === ALL_LISTS_ID ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                    fontWeight: selectedListId === ALL_LISTS_ID ? '600' : '400',
+                  }}
+                  onMouseEnter={(e) => { if (selectedListId !== ALL_LISTS_ID) e.currentTarget.style.backgroundColor = 'var(--bg-muted)'; }}
+                  onMouseLeave={(e) => { if (selectedListId !== ALL_LISTS_ID) e.currentTarget.style.backgroundColor = 'transparent'; }}>
+                  <ListTodo className="h-4 w-4 flex-shrink-0" />
+                  <span className="flex-1 truncate">All Lists</span>
+                  <span className="text-[11px]" style={{ color: 'var(--text-disabled)' }}>
+                    {displayedTaskLists.reduce((sum, tl) => sum + tl._count.tasks, 0)}
+                  </span>
+                </button>
+              )}
               {displayedTaskLists.length === 0 && (
                 <p className="px-2 py-4 text-xs" style={{ color: 'var(--text-disabled)' }}>No lists yet</p>
               )}
@@ -2562,8 +2618,12 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                 <div className="flex items-center justify-between border-b px-6 py-3"
                   style={{ borderColor: 'var(--border-default)' }}>
                   <div>
-                    <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{selectedList?.name}</h2>
-                    {selectedList?.description && (
+                    <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+                      {selectedListId === ALL_LISTS_ID ? 'All Lists' : selectedList?.name}
+                    </h2>
+                    {selectedListId === ALL_LISTS_ID ? (
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Tasks and files across every task list in this workspace</p>
+                    ) : selectedList?.description && (
                       <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{selectedList.description}</p>
                     )}
                   </div>
@@ -2581,7 +2641,7 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                   <div className="flex items-start justify-between gap-3 border-b px-4 py-2"
                     style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--accent-soft)' }}>
                     <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                      Showing expired files/documents linked to this workspace. Task Due Date and Document Expiry Date are separate.
+                      Showing expired files/documents across this workspace. Task Due Date and Document Expiry Date are separate.
                     </p>
                     <button type="button" onClick={() => setShowExpiryBanner(false)}
                       className="shrink-0" style={{ color: 'var(--text-muted)' }} aria-label="Dismiss">
@@ -2589,6 +2649,54 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                     </button>
                   </div>
                 )}
+
+                {/* Task-list breakdown chips (req. #8) — All Lists mode + an expiry filter active */}
+                {selectedListId === ALL_LISTS_ID && expiryFilter !== 'all' && expiryListBreakdown.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5 border-b px-4 py-2"
+                    style={{ borderColor: 'var(--border-subtle)' }}>
+                    <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Breakdown:</span>
+                    <button type="button" onClick={() => setExpiryListScope(null)}
+                      className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors"
+                      style={{
+                        backgroundColor: !expiryListScope ? 'var(--accent-primary)' : 'var(--bg-subtle)',
+                        color: !expiryListScope ? 'white' : 'var(--text-secondary)',
+                      }}>
+                      All {expiryFilter === 'expired' ? 'expired' : expiryFilter === 'expiring_soon' ? 'expiring' : 'missing expiry'}: {expiryListBreakdown.reduce((s, l) => s + l.count, 0)}
+                    </button>
+                    {expiryListBreakdown.map((l) => (
+                      <button key={l.id} type="button" onClick={() => setExpiryListScope(l.id)}
+                        className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors"
+                        style={{
+                          backgroundColor: expiryListScope === l.id ? 'var(--accent-primary)' : 'var(--bg-subtle)',
+                          color: expiryListScope === l.id ? 'white' : 'var(--text-secondary)',
+                        }}>
+                        {l.name}: {l.count}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Single-list scope note while an expiry filter is active (req. #6) — explains why
+                    the count here differs from the workspace-wide total, with a one-click escape hatch */}
+                {selectedListId !== ALL_LISTS_ID && expiryFilter !== 'all' && filteredTasks.length > 0 && (() => {
+                  const wsTotal = expiryFilter === 'expired' ? (workspace.metrics?.expiredFiles ?? 0)
+                    : expiryFilter === 'expiring_soon' ? (workspace.metrics?.expiringFiles ?? 0)
+                    : null;
+                  const label = expiryFilter === 'expired' ? 'expired' : expiryFilter === 'expiring_soon' ? 'expiring' : 'missing-expiry';
+                  return (
+                    <div className="flex items-center justify-between gap-3 border-b px-4 py-2"
+                      style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-subtle)' }}>
+                      <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                        Showing {filteredTasks.length} {label} file{filteredTasks.length !== 1 ? 's' : ''} in {selectedList?.name ?? 'this list'}.
+                        {wsTotal !== null && ` ${wsTotal} ${label} file${wsTotal !== 1 ? 's' : ''} exist across this workspace.`}
+                      </p>
+                      <button type="button" onClick={() => setSelectedListId(ALL_LISTS_ID)}
+                        className="shrink-0 text-xs font-medium" style={{ color: 'var(--accent-primary)' }}>
+                        View All →
+                      </button>
+                    </div>
+                  );
+                })()}
 
                 {/* Quick filters + search */}
                 <div className="flex items-center gap-2 flex-wrap border-b px-4 py-2"
@@ -2704,6 +2812,21 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                         <RefreshCw className="h-4 w-4" /> Retry
                       </button>
                     </div>
+                  ) : filteredTasks.length === 0 && selectedListId !== ALL_LISTS_ID && expiryFilter !== 'all' ? (
+                    /* req. #11 — empty state specific to "0 results in this list while an expiry
+                       filter is active", with a direct escape hatch instead of a generic dead end */
+                    <div className="flex flex-col items-center justify-center gap-2 py-16">
+                      <CheckSquare className="h-8 w-8" style={{ color: 'var(--text-disabled)' }} />
+                      <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                        No {expiryFilter === 'expired' ? 'expired' : expiryFilter === 'expiring_soon' ? 'expiring' : 'missing-expiry'} files found in {selectedList?.name ?? 'this list'}.
+                      </p>
+                      <p className="text-xs" style={{ color: 'var(--text-disabled)' }}>View all expired files across this workspace.</p>
+                      <button type="button" onClick={() => setSelectedListId(ALL_LISTS_ID)}
+                        className="mt-1 flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-white"
+                        style={{ backgroundColor: 'var(--accent-primary)' }}>
+                        View All Expired Files
+                      </button>
+                    </div>
                   ) : filteredTasks.length === 0 ? (
                     <div className="flex flex-col items-center justify-center gap-2 py-16">
                       <CheckSquare className="h-8 w-8" style={{ color: 'var(--text-disabled)' }} />
@@ -2733,6 +2856,7 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                           )}
                           {[
                             { label: 'Title',    cls: '' },
+                            ...(selectedListId === ALL_LISTS_ID ? [{ label: 'Task List', cls: '' }] : []),
                             { label: 'Status',   cls: '' },
                             { label: 'Priority', cls: '' },
                             { label: 'Assignee', cls: '' },
@@ -2841,6 +2965,11 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                                 )}
                               </div>
                             </td>
+                            {selectedListId === ALL_LISTS_ID && (
+                              <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>
+                                <span className="truncate block max-w-[140px]" title={task.taskList.name}>{task.taskList.name}</span>
+                              </td>
+                            )}
                             <td className="px-4 py-3"><StatusBadge status={task.status} size="xs" /></td>
                             <td className="px-4 py-3">
                               {task.isReference

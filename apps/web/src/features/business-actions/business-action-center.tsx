@@ -512,18 +512,22 @@ function RecalcHint({ onRefresh, loading }: { onRefresh: () => void; loading: bo
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
+// 'EXPIRY' is a combined pseudo-category covering both expiry rules together — matches the
+// dashboard's "Expiring / Expired Files" KPI card, which represents both as one count.
+const EXPIRY_RULES: DetectionRule[] = ['EXPIRED_FILE', 'EXPIRING_FILE'];
+
 export default function BusinessActionCenter({
   token,
   initialRuleFilter = '',
 }: {
   token: string;
-  initialRuleFilter?: DetectionRule | '';
+  initialRuleFilter?: DetectionRule | 'EXPIRY' | '';
 }) {
   const [items, setItems]               = useState<ActionItem[] | null>(null);
   const [loading, setLoading]           = useState(true);
   const [error, setError]               = useState('');
-  const [ruleFilter, setRuleFilter]     = useState<DetectionRule | 'ALL'>(
-    initialRuleFilter ? (initialRuleFilter as DetectionRule) : 'ALL',
+  const [ruleFilter, setRuleFilter]     = useState<DetectionRule | 'ALL' | 'EXPIRY'>(
+    initialRuleFilter ? initialRuleFilter : 'ALL',
   );
   const [showPreview, setShowPreview]   = useState(false);
   const [preview, setPreview]           = useState<ActionPreview | null>(null);
@@ -682,8 +686,12 @@ export default function BusinessActionCenter({
   const filtered = items
     ? ruleFilter === 'ALL'
       ? items
-      : items.filter((i) => i.ruleKey === ruleFilter)
+      : ruleFilter === 'EXPIRY'
+        ? items.filter((i) => EXPIRY_RULES.includes(i.ruleKey))
+        : items.filter((i) => i.ruleKey === ruleFilter)
     : [];
+
+  const expiryCount = items ? items.filter((i) => EXPIRY_RULES.includes(i.ruleKey)).length : 0;
 
   const activeItems = items
     ? items.filter((i) => localStatus[i.id] !== 'NOT_APPLICABLE')
@@ -786,6 +794,20 @@ export default function BusinessActionCenter({
             >
               All ({items.length})
             </button>
+            {expiryCount > 0 && (
+              <button
+                onClick={() => setRuleFilter(ruleFilter === 'EXPIRY' ? 'ALL' : 'EXPIRY')}
+                className="rounded-full px-2.5 py-0.5 text-[10px] font-medium"
+                style={{
+                  backgroundColor: ruleFilter === 'EXPIRY' ? 'var(--accent-primary)' : 'var(--accent-soft)',
+                  color: ruleFilter === 'EXPIRY' ? '#fff' : 'var(--accent-primary)',
+                  border: '1px solid var(--accent-primary)',
+                }}
+                title="Expired and expiring files together"
+              >
+                Expiry ({expiryCount})
+              </button>
+            )}
             {ALL_RULES.filter((r) => (countByRule[r] ?? 0) > 0).map((r) => {
               const vars = ruleColorVars(RULE_COLOR[r]);
               const active = ruleFilter === r;
@@ -879,7 +901,7 @@ export default function BusinessActionCenter({
             </span>
             <span className="flex items-center gap-1">
               <Filter className="h-3 w-3" />
-              {ruleFilter === 'ALL' ? 'Showing all rules' : `Filtered: ${RULE_LABELS[ruleFilter]}`}
+              {ruleFilter === 'ALL' ? 'Showing all rules' : ruleFilter === 'EXPIRY' ? 'Filtered: Expiry (expired + expiring)' : `Filtered: ${RULE_LABELS[ruleFilter]}`}
             </span>
           </div>
         )}

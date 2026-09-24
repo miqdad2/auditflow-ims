@@ -213,7 +213,7 @@ The active task list selection is a frontend state variable (`selectedListId`) p
 **Preservation rule** (applied on every workspace refresh via `loadWorkspace`/`refreshWorkspaceQuiet`):
 ```typescript
 setSelectedListId((currentId) => {
-  if (currentId && ws.taskLists.some((tl) => tl.id === currentId)) return currentId;
+  if (currentId && (currentId === ALL_LISTS_ID || ws.taskLists.some((tl) => tl.id === currentId))) return currentId;
   return ws.taskLists[0]?.id ?? null;
 });
 ```
@@ -223,6 +223,8 @@ setSelectedListId((currentId) => {
 **Stale response guard in `loadTasks`**: after the API responds, `loadTasks` checks `selectedListIdRef.current !== listId` and discards the response if the user switched lists while the request was in flight.
 
 **Background refresh**: `refreshWorkspaceQuiet` does not call `setLoading(true)` — no loading spinner during realtime-triggered workspace refreshes.
+
+**`ALL_LISTS_ID` sentinel** (`'__ALL__'`, added for the expiry review fix): a second valid value for `selectedListId`, meaning "every task list in this workspace" rather than one specific list. It is truthy, so it satisfies every existing `if (selectedListId)`/`if (listId)` guard without modification, and is explicitly exempted from the preservation rule's `.some()` membership check (shown above) so it survives realtime workspace refreshes exactly like a real list ID would. `loadTasks()` omits the `taskListId` query param entirely when `selectedListId === ALL_LISTS_ID` — `GET /tasks?workspaceId=` (no `taskListId`) already returns every root task across all lists in that workspace; no backend change was needed. Drag-and-drop reorder (`isReorderEnabled`) is explicitly disabled in this mode, since reordering is inherently per-list. Selected via a pinned "All Lists" row above the per-list sidebar nav, and forced automatically by `openExpiryReview()` (Workspace Status "Review" row / workspace "Files" pill) so a workspace-wide expiry count always lands on a view showing every matching file, not just whichever single list happened to be selected.
 
 ## Task Hierarchy Model
 

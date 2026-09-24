@@ -15,8 +15,8 @@ function ActionCenterContent() {
   const roles = user?.roles ?? [];
   const canAccess = roles.some((r) => ALLOWED_ROLES.includes(r));
 
-  // URL-param initial filters — ?type=OVERDUE_TASK, ?workspaceId=:id
-  const initialType = (searchParams.get('type') ?? '') as DetectionRule | '';
+  // URL-param initial filters — ?type=OVERDUE_TASK, ?type=EXPIRY (combined expired+expiring), ?workspaceId=:id
+  const initialType = (searchParams.get('type') ?? '') as DetectionRule | 'EXPIRY' | '';
 
   if (!canAccess) {
     return (
