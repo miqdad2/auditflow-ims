@@ -16,7 +16,7 @@ import { apiGet, apiPostAuth, apiPatchAuth, apiDeleteAuth, ApiError } from '@/li
 import { useAuth } from '@/lib/auth-context';
 import { useWorkspaceSocket, useSocket } from '@/lib/socket-provider';
 import { useToast } from '@/lib/toast-provider';
-import { StatusBadge, PriorityBadge, WorkspaceOpStatusBadge } from '@/components/status-badge';
+import { StatusBadge, PriorityBadge, WorkspaceOpStatusBadge, ExpiryBadge, type FileExpiryStatus } from '@/components/status-badge';
 import { CreateTaskListModal } from '@/features/workspaces/create-task-list-modal';
 import { CreateTaskModal } from '@/features/workspaces/create-task-modal';
 import { TaskDetailPanel } from '@/features/workspaces/task-detail-panel';
@@ -156,7 +156,13 @@ function formatKuwaitTime(iso: string | null | undefined): string {
   } catch { return ''; }
 }
 
-type TaskSort = 'manual' | 'newest-created' | 'oldest-created' | 'recently-updated' | 'oldest-updated';
+type TaskSort = 'manual' | 'newest-created' | 'oldest-created' | 'recently-updated' | 'oldest-updated' | 'expiry-urgency';
+// Independent filter dimension — combined (AND) with TaskFilter/search. Separate from Due Date.
+type ExpiryFilter = 'all' | 'expired' | 'expiring_soon' | 'missing';
+
+const EXPIRY_RANK: Record<FileExpiryStatus, number> = {
+  EXPIRED: 0, EXPIRING_SOON: 1, VALID: 2, MISSING_EXPIRY_DATE: 3,
+};
 
 export interface WorkspaceClientProps { params: Promise<{ id: string }>; }
 
@@ -191,6 +197,10 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
   const [taskFilter, setTaskFilter] = useState<TaskFilter>('all'); // adjusted after auth loads
   const [taskSearch, setTaskSearch] = useState('');
   const [taskSort, setTaskSort]     = useState<TaskSort>('manual');
+  // Expiry review — independent filter dimension for task-linked file expiry (separate from Due Date)
+  const [expiryFilter, setExpiryFilter] = useState<ExpiryFilter>('all');
+  const [showExpiryBanner, setShowExpiryBanner] = useState(false);
+  const [createTaskInitialTitle, setCreateTaskInitialTitle] = useState<string | undefined>(undefined);
   const [openMenuId, setOpenMenuId]         = useState<string | null>(null);
   const [moveTaskId, setMoveTaskId]         = useState<string | null>(null);
   const [moveTargetListId, setMoveTargetListId] = useState('');
@@ -540,7 +550,7 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
   }, [activeTab]);
 
   // Reorder is only available when the full unfiltered manual-order list is visible
-  const isReorderEnabled = canCollaborate && taskFilter === 'all' && !taskSearch.trim() && taskSort === 'manual';
+  const isReorderEnabled = canCollaborate && taskFilter === 'all' && !taskSearch.trim() && taskSort === 'manual' && expiryFilter === 'all';
 
   // ── Filtered tasks ────────────────────────────────────────────────────────────
 
@@ -555,14 +565,30 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
     if (taskFilter === 'returned')       list = list.filter((t) => t.status === 'REJECTED');
     if (taskFilter === 'reference')        list = list.filter((t) => t.isReference === true);
     if (taskFilter === 'pending_approval') list = list.filter((t) => t.approvalStatus === 'PENDING');
+    // Expiry filter — independent dimension, AND-combined with the status filter above
+    if (expiryFilter === 'expired')       list = list.filter((t) => t.fileExpiry?.status === 'EXPIRED');
+    if (expiryFilter === 'expiring_soon') list = list.filter((t) => t.fileExpiry?.status === 'EXPIRING_SOON');
+    if (expiryFilter === 'missing')       list = list.filter((t) => t.fileExpiry?.status === 'MISSING_EXPIRY_DATE');
     if (taskSearch.trim()) list = list.filter((t) => t.title.toLowerCase().includes(taskSearch.toLowerCase()));
     // Apply sort — manual = preserve sortOrder from backend
     if (taskSort === 'newest-created')   return [...list].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     if (taskSort === 'oldest-created')   return [...list].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
     if (taskSort === 'recently-updated') return [...list].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
     if (taskSort === 'oldest-updated')   return [...list].sort((a, b) => new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime());
+    if (taskSort === 'expiry-urgency')   return [...list].sort((a, b) => {
+      const ar = a.fileExpiry ? EXPIRY_RANK[a.fileExpiry.status] : 4;
+      const br = b.fileExpiry ? EXPIRY_RANK[b.fileExpiry.status] : 4;
+      if (ar !== br) return ar - br;
+      return (a.fileExpiry?.daysLeft ?? Infinity) - (b.fileExpiry?.daysLeft ?? Infinity);
+    });
     return list;
-  }, [tasks, taskFilter, taskSearch, taskSort, user?.id]);
+  }, [tasks, taskFilter, taskSearch, taskSort, expiryFilter, user?.id]);
+
+  function expiryFilterCount(f: Exclude<ExpiryFilter, 'all'>) {
+    if (f === 'expired')        return tasks.filter((t) => t.fileExpiry?.status === 'EXPIRED').length;
+    if (f === 'expiring_soon')  return tasks.filter((t) => t.fileExpiry?.status === 'EXPIRING_SOON').length;
+    return tasks.filter((t) => t.fileExpiry?.status === 'MISSING_EXPIRY_DATE').length;
+  }
 
   function filterCount(f: TaskFilter) {
     const now = nowRef.current;
@@ -1063,6 +1089,23 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
     return new Date(iso).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
   }
 
+  function formatDaysLeft(daysLeft: number | null) {
+    if (daysLeft === null) return '—';
+    if (daysLeft < 0) return `Expired ${Math.abs(daysLeft)} day${Math.abs(daysLeft) !== 1 ? 's' : ''} ago`;
+    if (daysLeft === 0) return 'Expires today';
+    return `Expires in ${daysLeft} day${daysLeft !== 1 ? 's' : ''}`;
+  }
+
+  // Root-cause fix for the Workspace Status "Review" action and the "Files" summary chip:
+  // both previously just switched tabs with no filter applied. This single helper wires
+  // navigation + expiry filter + urgency sort + explanation banner together (req. #10).
+  function openExpiryReview(status: 'expired' | 'expiring_soon') {
+    setActiveTab('tasks');
+    setExpiryFilter(status);
+    setTaskSort('expiry-urgency');
+    setShowExpiryBanner(true);
+  }
+
   const selectedList = workspace?.taskLists.find((tl) => tl.id === selectedListId) ?? null;
   const otherLists   = workspace?.taskLists.filter((tl) => tl.id !== selectedListId) ?? [];
   const memberCount  = workspace?._count?.members ?? overview?.members ?? members.length;
@@ -1205,7 +1248,7 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
               {/* Files requiring attention — shown when > 0 */}
               {((workspace.metrics?.expiredFiles ?? 0) + (workspace.metrics?.expiringFiles ?? 0)) > 0 && (
                 <button type="button"
-                  onClick={() => setActiveTab('tasks')}
+                  onClick={() => openExpiryReview((workspace.metrics?.expiredFiles ?? 0) > 0 ? 'expired' : 'expiring_soon')}
                   className="rounded-full px-2.5 py-1 text-xs font-medium transition-opacity hover:opacity-75"
                   style={{ backgroundColor: 'var(--state-error-soft)', color: 'var(--state-error)', border: '1px solid var(--state-error)30' }}>
                   <span className="font-semibold">
@@ -1335,7 +1378,7 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
       {/* ── OVERVIEW TAB ─────────────────────────────────────────────────────── */}
       {activeTab === 'overview' && (
         <div className="flex-1 overflow-y-auto p-6">
-          <div className="mx-auto max-w-4xl space-y-6">
+          <div className="mx-auto max-w-6xl space-y-4">
 
             {/* Stale banner */}
             {overviewStale && !overviewLoading && (
@@ -1407,7 +1450,7 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                   const SETUP_CODES = new Set([
                     'DEPARTMENT_NOT_ASSIGNED', 'DEPARTMENT_INACTIVE', 'NO_OPERATIONAL_MEMBERS',
                   ]);
-                  type ReasonAction = { label: string; tab?: WorkspaceTab; modal?: 'assign-dept' };
+                  type ReasonAction = { label: string; tab?: WorkspaceTab; modal?: 'assign-dept'; expiry?: 'expired' | 'expiring_soon' };
                   const ACTION_FOR_CODE: Record<string, ReasonAction> = {
                     DEPARTMENT_NOT_ASSIGNED:     { label: 'Assign Department', modal: 'assign-dept' },
                     DEPARTMENT_INACTIVE:         { label: 'Manage Dept',       tab: 'members' },
@@ -1418,8 +1461,8 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                     WAITING_REVIEW:              { label: 'Review',            tab: 'tasks' },
                     RETURNED_TASKS:              { label: 'Review',            tab: 'tasks' },
                     DOCS_UNDER_REVIEW:           { label: 'Review',            tab: 'documents' },
-                    EXPIRED_FILES:               { label: 'Review',            tab: 'tasks' },
-                    EXPIRING_FILES:              { label: 'Review',            tab: 'tasks' },
+                    EXPIRED_FILES:               { label: 'Review',            tab: 'tasks', expiry: 'expired' },
+                    EXPIRING_FILES:              { label: 'Review',            tab: 'tasks', expiry: 'expiring_soon' },
                     OVERDUE_ISSUES:              { label: 'Review',            tab: 'ncr' },
                     OPEN_ISSUES:                 { label: 'Review',            tab: 'ncr' },
                     ISSUES_WAITING_VERIFICATION: { label: 'Review',            tab: 'ncr' },
@@ -1436,6 +1479,8 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                           .then((d) => setAvailableDepts(d.filter((x) => x.id !== currentDeptId)))
                           .catch(() => {});
                       setShowAssignDeptModal(true);
+                    } else if (act.expiry) {
+                      openExpiryReview(act.expiry);
                     } else if (act.tab) {
                       setActiveTab(act.tab);
                     }
@@ -1501,7 +1546,7 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                                 {setupReasons.map((r) => {
                                   const act = ACTION_FOR_CODE[r.code];
                                   return (
-                                    <div key={r.code} className="flex items-center justify-between py-1.5">
+                                    <div key={r.code} className="flex items-center justify-between py-1">
                                       <div className="flex items-center gap-2">
                                         <span className="h-1.5 w-1.5 rounded-full shrink-0"
                                           style={{ backgroundColor: 'var(--state-warning)' }} />
@@ -1533,7 +1578,7 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                                   const act = ACTION_FOR_CODE[r.code];
                                   const dotColor = r.severity === 'ERROR' ? 'var(--state-error)' : 'var(--state-warning)';
                                   return (
-                                    <div key={r.code} className="flex items-center justify-between py-1.5">
+                                    <div key={r.code} className="flex items-center justify-between py-1">
                                       <div className="flex items-center gap-2">
                                         <span className="h-1.5 w-1.5 rounded-full shrink-0"
                                           style={{ backgroundColor: dotColor }} />
@@ -1608,8 +1653,11 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                   </div>
                 )}
 
-                {/* ── KPI grid ──────────────────────────────────────────── */}
-                <div className="grid grid-cols-2 gap-4">
+                {/* ── KPI grid — masonry-like: 3 independent column stacks so short cards
+                     (Documents/Team) never inherit a tall card's (Task Summary) row height ── */}
+                <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {/* Column 1: Task Summary + Issues & Actions */}
+                  <div className="flex flex-col gap-4">
                   {/* Tasks — upgraded (spec Parts 6-7) */}
                   <SummaryCard title="Task Summary" accent="var(--accent-primary)">
                     {overview.work.open === 0 && overview.work.completed === 0 ? (
@@ -1668,29 +1716,6 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                     })()}
                   </SummaryCard>
 
-                  {/* Documents (spec Part 8) */}
-                  <SummaryCard title="Documents" accent="var(--accent-primary)">
-                    {overview.documents.total === 0 ? (
-                      <div className="py-2 text-xs" style={{ color: 'var(--text-muted)' }}>No documents uploaded yet. Upload controlled documents to track status.</div>
-                    ) : (
-                      <>
-                        <KpiRow label="Total"          value={overview.documents.total} />
-                        <KpiRow label="✓ Approved"     value={overview.documents.approved}   color="var(--state-success)" />
-                        <KpiRow label="⟳ Under Review" value={overview.documents.underReview} color={overview.documents.underReview > 0 ? 'var(--state-warning)' : undefined} />
-                        {overview.documents.rejected > 0 && (
-                          <KpiRow label="✗ Requiring Attention" value={overview.documents.rejected} color="var(--state-error)" />
-                        )}
-                      </>
-                    )}
-                    <button type="button" onClick={() => setActiveTab('documents')}
-                      className="mt-3 w-full rounded-lg py-1.5 text-xs font-medium transition-colors"
-                      style={{ backgroundColor: 'var(--bg-subtle)', color: 'var(--text-secondary)' }}
-                      onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--accent-soft)')}
-                      onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'var(--bg-subtle)')}>
-                      View Documents →
-                    </button>
-                  </SummaryCard>
-
                   {/* Issues & Actions (spec Part 8 — added Waiting Verification) */}
                   <SummaryCard title="Issues & Actions" accent="var(--state-error)">
                     {overview.ncrCapa.open === 0 && overview.ncrCapa.closed === 0 ? (
@@ -1713,6 +1738,32 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                       onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--accent-soft)')}
                       onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'var(--bg-subtle)')}>
                       View Issues →
+                    </button>
+                  </SummaryCard>
+                  </div>
+
+                  {/* Column 2: Documents + Team */}
+                  <div className="flex flex-col gap-4">
+                  {/* Documents (spec Part 8) */}
+                  <SummaryCard title="Documents" accent="var(--accent-primary)">
+                    {overview.documents.total === 0 ? (
+                      <div className="py-2 text-xs" style={{ color: 'var(--text-muted)' }}>No documents uploaded yet. Upload controlled documents to track status.</div>
+                    ) : (
+                      <>
+                        <KpiRow label="Total"          value={overview.documents.total} />
+                        <KpiRow label="✓ Approved"     value={overview.documents.approved}   color="var(--state-success)" />
+                        <KpiRow label="⟳ Under Review" value={overview.documents.underReview} color={overview.documents.underReview > 0 ? 'var(--state-warning)' : undefined} />
+                        {overview.documents.rejected > 0 && (
+                          <KpiRow label="✗ Requiring Attention" value={overview.documents.rejected} color="var(--state-error)" />
+                        )}
+                      </>
+                    )}
+                    <button type="button" onClick={() => setActiveTab('documents')}
+                      className="mt-3 w-full rounded-lg py-1.5 text-xs font-medium transition-colors"
+                      style={{ backgroundColor: 'var(--bg-subtle)', color: 'var(--text-secondary)' }}
+                      onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--accent-soft)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'var(--bg-subtle)')}>
+                      View Documents →
                     </button>
                   </SummaryCard>
 
@@ -1775,25 +1826,28 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                       </button>
                     )}
                   </SummaryCard>
-                </div>
-
-                {/* Recent Activity (Part 7) */}
-                <div>
-                  <div className="mb-3 flex items-center justify-between">
-                    <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Recent Activity</h3>
-                    <button type="button" onClick={() => setActiveTab('activity')}
-                      className="text-xs" style={{ color: 'var(--accent-primary)' }}>
-                      View all →
-                    </button>
                   </div>
-                  <div className="overflow-hidden rounded-xl border" style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-surface)' }}>
+
+                  {/* Column 3: Recent Activity — placed higher (top of its own column, not pushed below a 2x2 grid) */}
+                  <div className="sm:col-span-2 lg:col-span-1 rounded-xl border overflow-hidden"
+                    style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-surface)' }}>
+                    <div className="flex items-center justify-between border-b px-4 py-2.5" style={{ borderColor: 'var(--border-subtle)' }}>
+                      <p className="pl-2 text-[11px] font-semibold uppercase tracking-wide"
+                        style={{ color: 'var(--text-muted)', borderLeft: '3px solid var(--text-muted)' }}>
+                        Recent Activity
+                      </p>
+                      <button type="button" onClick={() => setActiveTab('activity')}
+                        className="text-xs font-medium" style={{ color: 'var(--accent-primary)' }}>
+                        View all →
+                      </button>
+                    </div>
                     {overview.recentActivity.length === 0 ? (
                       <div className="flex items-center gap-3 px-4 py-6">
                         <Activity className="h-5 w-5 flex-shrink-0" style={{ color: 'var(--text-disabled)' }} />
                         <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No activity yet in this workspace.</p>
                       </div>
                     ) : (
-                      overview.recentActivity.map((entry, i) => {
+                      overview.recentActivity.slice(0, 5).map((entry, i, arr) => {
                         const actor = entry.actor?.fullName ?? 'System';
                         const entity = ENTITY_LABELS[entry.entityType] ?? entry.entityType;
                         const titlePart = entry.entityTitle
@@ -1815,8 +1869,8 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                         };
                         const actionText = verb[entry.action] ?? entry.action.toLowerCase().replace(/_/g, ' ');
                         return (
-                          <div key={entry.id} className="flex items-start gap-3 px-4 py-3"
-                            style={{ borderBottom: i < overview.recentActivity.length - 1 ? '1px solid var(--border-subtle)' : undefined }}>
+                          <div key={entry.id} className="flex items-start gap-3 px-4 py-2.5"
+                            style={{ borderBottom: i < arr.length - 1 ? '1px solid var(--border-subtle)' : undefined }}>
                             <span className="mt-0.5 flex-shrink-0" style={{ color: 'var(--accent-primary)' }}>
                               <EntityIcon type={entry.entityType} />
                             </span>
@@ -1832,38 +1886,6 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                           </div>
                         );
                       })
-                    )}
-                  </div>
-                </div>
-
-                {/* Quick links */}
-                <div>
-                  <h3 className="mb-3 text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Quick Links</h3>
-                  <div className="flex flex-wrap gap-2">
-                    {([
-                      { label: 'Tasks',     Icon: ListTodo,      act: () => setActiveTab('tasks'),     show: canCollaborate },
-                      { label: 'Documents', Icon: FileCheck,     act: () => setActiveTab('documents'), show: true },
-                      { label: 'Issues & Actions', Icon: AlertTriangle, act: () => setActiveTab('ncr'), show: true },
-                      { label: 'Members',   Icon: Users,         act: () => setActiveTab('members'),   show: isElevatedAccess || !!myWsRole },
-                    ] as Array<{ label: string; Icon: React.ElementType; act: () => void; show: boolean }>)
-                    .filter((l) => l.show)
-                    .map(({ label, Icon, act }) => (
-                      <button key={label} type="button" onClick={act}
-                        className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm transition-colors"
-                        style={{ borderColor: 'var(--border-default)', color: 'var(--text-secondary)', backgroundColor: 'var(--bg-surface)' }}
-                        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--bg-subtle)')}
-                        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'var(--bg-surface)')}>
-                        <Icon className="h-4 w-4" />{label}
-                      </button>
-                    ))}
-                    {/* Action Center deep-link — SUPER_ADMIN / SUPER_USER only */}
-                    {(user?.roles ?? []).some((r) => ['SUPER_ADMIN', 'SUPER_USER'].includes(r)) && (
-                      <Link
-                        href={`/action-center?workspaceId=${workspaceId}`}
-                        className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm transition-colors"
-                        style={{ borderColor: 'var(--accent-primary)', color: 'var(--accent-primary)', backgroundColor: 'var(--accent-soft)' }}>
-                        <ShieldAlert className="h-4 w-4" />Action Center
-                      </Link>
                     )}
                   </div>
                 </div>
@@ -2554,6 +2576,20 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                   )}
                 </div>
 
+                {/* Expiry deep-link explanation banner (req. #10) */}
+                {showExpiryBanner && (
+                  <div className="flex items-start justify-between gap-3 border-b px-4 py-2"
+                    style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--accent-soft)' }}>
+                    <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                      Showing expired files/documents linked to this workspace. Task Due Date and Document Expiry Date are separate.
+                    </p>
+                    <button type="button" onClick={() => setShowExpiryBanner(false)}
+                      className="shrink-0" style={{ color: 'var(--text-muted)' }} aria-label="Dismiss">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                )}
+
                 {/* Quick filters + search */}
                 <div className="flex items-center gap-2 flex-wrap border-b px-4 py-2"
                   style={{ borderColor: 'var(--border-subtle)' }}>
@@ -2580,6 +2616,27 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                     );
                   })}
                   <div className="ml-auto flex items-center gap-2">
+                    {/* Expiry dropdown — independent filter dimension, keeps existing status pills uncrowded */}
+                    <select
+                      value={expiryFilter}
+                      onChange={(e) => {
+                        const v = e.target.value as ExpiryFilter;
+                        setExpiryFilter(v);
+                        if (v === 'all') setShowExpiryBanner(false);
+                      }}
+                      className="rounded-lg border px-2 py-1 text-[11px] outline-none cursor-pointer"
+                      style={{
+                        borderColor: expiryFilter !== 'all' ? 'var(--state-error)' : 'var(--border-default)',
+                        backgroundColor: expiryFilter !== 'all' ? 'var(--state-error-soft)' : 'var(--bg-subtle)',
+                        color: expiryFilter !== 'all' ? 'var(--state-error)' : 'var(--text-secondary)',
+                      }}
+                      title="Filter by file expiry status"
+                    >
+                      <option value="all">Expiry: All</option>
+                      <option value="expired">Expired ({expiryFilterCount('expired')})</option>
+                      <option value="expiring_soon">Expiring Soon ({expiryFilterCount('expiring_soon')})</option>
+                      <option value="missing">Missing Expiry Date ({expiryFilterCount('missing')})</option>
+                    </select>
                     {/* Sort dropdown */}
                     <select
                       value={taskSort}
@@ -2593,6 +2650,7 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                       <option value="oldest-created">Oldest first</option>
                       <option value="recently-updated">Recently updated</option>
                       <option value="oldest-updated">Least recently updated</option>
+                      <option value="expiry-urgency">Expiry urgency</option>
                     </select>
                     {/* Search */}
                     <div className="flex items-center gap-1.5 rounded-lg border px-2.5 py-1"
@@ -2679,6 +2737,9 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                             { label: 'Priority', cls: '' },
                             { label: 'Assignee', cls: '' },
                             { label: 'Due Date', cls: '' },
+                            { label: 'Expiry Status',        cls: '' },
+                            { label: 'Expiry Date',          cls: ' hidden lg:table-cell' },
+                            { label: 'Days Left / Overdue',  cls: ' hidden xl:table-cell' },
                             { label: 'Created',  cls: ' hidden lg:table-cell' },
                             { label: 'Updated',  cls: '' },
                             { label: '',         cls: '' },
@@ -2692,7 +2753,15 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                         </tr>
                       </thead>
                       <tbody>
-                        {filteredTasks.map((task, taskIdx) => (
+                        {filteredTasks.map((task, taskIdx) => {
+                          // Row highlighting only when an expiry filter is active (req. #7)
+                          const expiryHighlight = expiryFilter !== 'all' && task.fileExpiry
+                            ? task.fileExpiry.status === 'EXPIRED' ? { borderLeft: '3px solid var(--state-error)', backgroundColor: 'var(--state-error-soft)' } :
+                              task.fileExpiry.status === 'EXPIRING_SOON' ? { borderLeft: '3px solid var(--state-warning)', backgroundColor: 'var(--state-warning-soft)' } :
+                              task.fileExpiry.status === 'MISSING_EXPIRY_DATE' ? { borderLeft: '3px solid var(--border-strong)', backgroundColor: 'var(--bg-muted)' } :
+                              undefined
+                            : undefined;
+                          return (
                           <tr key={task.id}
                             className="group cursor-pointer transition-colors"
                             draggable={isReorderEnabled}
@@ -2701,10 +2770,11 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                               opacity: dragTaskId === task.id ? 0.4 : 1,
                               outline: dragOverIndex === taskIdx && dragTaskId !== task.id ? '2px solid var(--accent-primary)' : 'none',
                               outlineOffset: '-1px',
+                              ...expiryHighlight,
                             }}
-                            onClick={(e) => { if (dragTaskId) return; setSelectedTaskId(task.id); void e; }}
+                            onClick={(e) => { if (dragTaskId) return; setHighlightedFileId(null); setSelectedTaskId(task.id); void e; }}
                             onMouseEnter={(e) => { if (!dragTaskId) e.currentTarget.style.backgroundColor = 'var(--bg-muted)'; }}
-                            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = expiryHighlight?.backgroundColor ?? 'transparent')}
                             onDragStart={isReorderEnabled ? (e) => handleDragStart(e, task.id) : undefined}
                             onDragOver={isReorderEnabled ? (e) => handleDragOver(e, taskIdx) : undefined}
                             onDrop={isReorderEnabled ? () => handleDrop(taskIdx) : undefined}
@@ -2938,6 +3008,21 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                                 );
                               })()}
                             </td>
+                            {/* Expiry Status — task-linked file expiry, separate from Due Date */}
+                            <td className="px-4 py-3 text-xs">
+                              {task.fileExpiry
+                                ? <ExpiryBadge status={task.fileExpiry.status as FileExpiryStatus} size="xs" />
+                                : <span style={{ color: 'var(--text-disabled)' }}>—</span>}
+                            </td>
+                            {/* Expiry Date */}
+                            <td className="px-4 py-3 text-xs hidden lg:table-cell" style={{ color: 'var(--text-muted)' }}>
+                              {formatDate(task.fileExpiry?.expiryDate ?? null)}
+                            </td>
+                            {/* Days Left / Overdue */}
+                            <td className="px-4 py-3 text-xs hidden xl:table-cell"
+                              style={{ color: task.fileExpiry?.status === 'EXPIRED' ? 'var(--state-error)' : task.fileExpiry?.status === 'EXPIRING_SOON' ? 'var(--state-warning)' : 'var(--text-muted)' }}>
+                              {formatDaysLeft(task.fileExpiry?.daysLeft ?? null)}
+                            </td>
                             {/* Created — Kuwait date with tooltip */}
                             <td className="px-4 py-3 text-xs hidden lg:table-cell" style={{ color: 'var(--text-muted)' }}>
                               {task.createdAt ? (
@@ -2973,9 +3058,15 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                                       const isFirst  = taskIdx2 === 0;
                                       const isLast   = taskIdx2 === tasks.length - 1;
                                       return [
-                                        { icon: Eye,          label: 'Open task',    action: () => { setSelectedTaskId(task.id); setOpenMenuId(null); }, del: false },
+                                        { icon: Eye,          label: 'Open task',    action: () => { setHighlightedFileId(null); setSelectedTaskId(task.id); setOpenMenuId(null); }, del: false },
                                         { icon: ClipboardCopy,label: 'Copy link',    action: () => copyTaskLink(task.id), del: false },
                                         { icon: Copy,         label: 'Duplicate',    action: () => void handleDuplicate(task.id), del: false },
+                                        // Expiry row actions — only for tasks with a tracked file attachment (req. #12)
+                                        // Reuses the existing highlightFileId mechanism (task-detail-panel.tsx) — same
+                                        // "Opened from expiry alert" banner already wired for notification deep-links.
+                                        ...(task.fileExpiry ? [{ icon: RefreshCw, label: 'Renew / Upload Revision', action: () => { setHighlightedFileId(task.fileExpiry?.attachmentId ?? null); setSelectedTaskId(task.id); setOpenMenuId(null); }, del: false }] : []),
+                                        ...(task.fileExpiry ? [{ icon: Pencil,    label: 'Set Expiry Date',         action: () => { setHighlightedFileId(task.fileExpiry?.attachmentId ?? null); setSelectedTaskId(task.id); setOpenMenuId(null); }, del: false }] : []),
+                                        ...(task.fileExpiry ? [{ icon: Plus,      label: 'Create Renewal Task',     action: () => { setCreateTaskInitialTitle(`Renew: ${task.fileExpiry?.fileName ?? task.title}`); setShowCreateTask(true); setOpenMenuId(null); }, del: false }] : []),
                                         // Fallback reorder actions — all four, enabled only in manual-all mode
                                         ...(isReorderEnabled && !isFirst  ? [{ icon: ChevronsUp,  label: 'Move to top',    action: () => { setOpenMenuId(null); moveTaskToTop(task.id); },    del: false }] : []),
                                         ...(isReorderEnabled && !isFirst  ? [{ icon: ChevronUp,   label: 'Move up',         action: () => { setOpenMenuId(null); moveTaskUp(task.id); },        del: false }] : []),
@@ -2999,7 +3090,8 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                               </div>
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   )}
@@ -3023,7 +3115,8 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
 
       {showCreateTask && selectedListId && (
         <CreateTaskModal workspaceId={workspaceId} taskListId={selectedListId}
-          onClose={() => setShowCreateTask(false)}
+          initialTitle={createTaskInitialTitle}
+          onClose={() => { setShowCreateTask(false); setCreateTaskInitialTitle(undefined); }}
           onCreated={(task) => {
             setTasks((prev) => [...prev, task]);
             setWorkspace((prev) => {
@@ -3034,6 +3127,7 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
               showToast('Task created and submitted for approval.');
             }
             setShowCreateTask(false);
+            setCreateTaskInitialTitle(undefined);
           }} />
       )}
 

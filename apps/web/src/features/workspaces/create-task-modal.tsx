@@ -10,6 +10,7 @@ interface Props {
   workspaceId: string;
   taskListId: string;
   parentTaskId?: string;
+  initialTitle?: string;
   onClose: () => void;
   onCreated: (task: TaskSummary) => void;
 }
@@ -38,7 +39,7 @@ const inputStyle = {
   color: 'var(--text-primary)',
 };
 
-export function CreateTaskModal({ workspaceId, taskListId, parentTaskId, onClose, onCreated }: Props) {
+export function CreateTaskModal({ workspaceId, taskListId, parentTaskId, initialTitle, onClose, onCreated }: Props) {
   const { token, user } = useAuth();
 
   // Detect MEMBER mode: not elevated and does not have tasks.create permission
@@ -49,7 +50,7 @@ export function CreateTaskModal({ workspaceId, taskListId, parentTaskId, onClose
   // MEMBER private task mode: workspace member without elevated role or create permission
   const isMemberCreate = !isElevated && !hasCreatePerm && !!workspaceId && !parentTaskId;
 
-  const [title,        setTitle]        = useState('');
+  const [title,        setTitle]        = useState(initialTitle ?? '');
   const [description,  setDescription]  = useState('');
   const [priorityKey,  setPriorityKey]  = useState<string>('MEDIUM');
   const [dueDate,      setDueDate]      = useState('');

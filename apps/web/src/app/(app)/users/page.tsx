@@ -630,9 +630,10 @@ export default function UsersPage() {
                           style={{ backgroundColor: 'var(--accent-primary)' }}>
                           {u.fullName.charAt(0).toUpperCase()}
                         </div>
-                        <div>
-                          <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{u.fullName}</div>
-                          <div className="text-xs" style={{ color: 'var(--text-muted)' }}>@{u.username}</div>
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>{u.fullName}</div>
+                          <div className="text-xs truncate" style={{ color: 'var(--text-muted)' }} title={u.email}>{u.email}</div>
+                          <div className="text-[10px]" style={{ color: 'var(--text-disabled)' }}>@{u.username}</div>
                         </div>
                       </div>
                     </td>
@@ -1076,6 +1077,28 @@ export default function UsersPage() {
                     style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)', color: 'var(--text-primary)' }} />
                 </div>
               </div>
+
+              {/* Email + Username — read-only: UpdateUserDto does not accept either field,
+                  so no backend/audit support exists to edit them from here. Shown so an admin
+                  can positively identify the account before changing access/dashboard/workspace settings. */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Email</label>
+                  <input type="text" value={editUser.email} disabled readOnly
+                    className="w-full cursor-not-allowed rounded-lg border px-3 py-1.5 text-sm"
+                    style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-muted)', color: 'var(--text-muted)' }} />
+                  <p className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                    Email is used for login and audit identity.
+                  </p>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Username</label>
+                  <input type="text" value={editUser.username} disabled readOnly
+                    className="w-full cursor-not-allowed rounded-lg border px-3 py-1.5 text-sm"
+                    style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-muted)', color: 'var(--text-muted)' }} />
+                </div>
+              </div>
+
               <div>
                 <label className="mb-1 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Department</label>
                 <select value={editForm.departmentId}

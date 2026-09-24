@@ -51,6 +51,18 @@ export enum DocumentStatus {
   ARCHIVED = "ARCHIVED",
 }
 
+// ─── File Expiry Status (task-linked file attachments) ────────────────────────
+// Derived from FileAttachment.expiryDate — separate from Task.dueDate.
+
+export enum FileExpiryStatus {
+  EXPIRED = "EXPIRED",
+  EXPIRING_SOON = "EXPIRING_SOON",
+  VALID = "VALID",
+  MISSING_EXPIRY_DATE = "MISSING_EXPIRY_DATE",
+}
+
+export const DEFAULT_FILE_EXPIRY_REMINDER_DAYS = 14;
+
 // ─── Evidence Status ──────────────────────────────────────────────────────────
 
 export enum EvidenceStatus {

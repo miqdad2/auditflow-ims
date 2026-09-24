@@ -46,7 +46,7 @@ export type RuleColor = 'error' | 'warning' | 'info' | 'muted';
 export const RULE_COLOR: Record<DetectionRule, RuleColor> = {
   OVERDUE_TASK:               'error',
   UNASSIGNED_TASK:            'warning',
-  DOCUMENT_UNDER_REVIEW:      'info',
+  DOCUMENT_UNDER_REVIEW:      'warning',
   EXPIRED_FILE:               'error',
   EXPIRING_FILE:              'warning',
   OPEN_ISSUE:                 'error',

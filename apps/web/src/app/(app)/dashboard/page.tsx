@@ -157,18 +157,18 @@ function KpiCard({
   const numColor    = isUrgent ? 'var(--state-error)'   : isWarn ? 'var(--state-warning)'   : 'var(--text-primary)';
 
   const inner = (
-    <div className="flex min-h-24 flex-col justify-between rounded-xl p-4 transition-shadow hover:shadow-sm"
+    <div className="flex min-h-20 flex-col justify-between rounded-xl p-3.5 transition-shadow hover:shadow-sm"
       style={{ backgroundColor: 'var(--bg-surface)', border: `1px solid ${borderColor}` }}>
       <div className="flex items-start justify-between gap-2">
         <p className="text-xs font-medium leading-tight" style={{ color: 'var(--text-secondary)' }}>{label}</p>
-        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
+        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg"
           style={{ backgroundColor: iconBg, color: iconColor }}>
-          <Icon className="h-3.5 w-3.5" />
+          <Icon className="h-3 w-3" />
         </div>
       </div>
       <div>
-        <p className="text-3xl font-semibold leading-none" style={{ color: numColor }}>{value}</p>
-        {sub && <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>{sub}</p>}
+        <p className="text-2xl font-semibold leading-none" style={{ color: numColor }}>{value}</p>
+        {sub && <p className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>{sub}</p>}
       </div>
     </div>
   );
@@ -472,7 +472,7 @@ export default function DashboardPage() {
     const myWaitingReview = myAssignments.filter((t) => t.status === 'WAITING_REVIEW').length;
 
     return (
-      <div className="flex flex-col gap-5">
+      <div className="flex flex-col gap-4">
         {updatesBanner}
         {pageHeader}
 
@@ -530,7 +530,7 @@ export default function DashboardPage() {
         {/* ── 2. Unified Action Center ── */}
         <div className="rounded-xl" style={{ backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-default)' }}>
           {/* Header */}
-          <div className="flex items-center justify-between px-5 py-3.5 border-b" style={{ borderColor: 'var(--border-default)' }}>
+          <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: 'var(--border-default)' }}>
             <div className="flex items-center gap-2">
               <div className="flex h-7 w-7 items-center justify-center rounded-lg"
                 style={{
@@ -555,7 +555,7 @@ export default function DashboardPage() {
           </div>
 
           {/* Tabs */}
-          <div className="flex items-center gap-1 px-5 pt-3 pb-0 overflow-x-auto">
+          <div className="flex items-center gap-1 px-5 pt-2.5 pb-0 overflow-x-auto">
             {(['all', 'tasks', 'approvals', 'documents', 'issues', 'expiry'] as ActionTab[]).map((tab) => {
               const count = tabCounts[tab];
               const active = actionTab === tab;
@@ -584,7 +584,7 @@ export default function DashboardPage() {
           </div>
 
           {/* Content */}
-          <div className="p-4">
+          <div className="p-3">
             {bacLoading ? (
               <div className="flex items-center justify-center py-6">
                 <RefreshCw className="h-4 w-4 animate-spin" style={{ color: 'var(--text-muted)' }} />
@@ -610,9 +610,9 @@ export default function DashboardPage() {
                     </div>
                   ) : (
                     <div className="flex flex-col gap-1.5">
-                      {approvalWorkspaces.map((ws) => (
+                      {approvalWorkspaces.slice(0, 6).map((ws) => (
                         <div key={ws.id}
-                          className="flex items-center gap-3 rounded-lg px-3 py-2.5"
+                          className="flex items-center gap-3 rounded-lg px-3 py-2"
                           style={{ backgroundColor: 'var(--accent-soft)', border: '1px solid var(--accent-primary)20' }}>
                           <Lock className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--accent-primary)' }} />
                           <div className="flex-1 min-w-0">
@@ -628,6 +628,13 @@ export default function DashboardPage() {
                           </Link>
                         </div>
                       ))}
+                      {approvalWorkspaces.length > 6 && (
+                        <Link href="/action-center"
+                          className="flex items-center justify-center gap-1 rounded-lg py-2 text-xs font-medium"
+                          style={{ backgroundColor: 'var(--bg-subtle)', color: 'var(--accent-primary)' }}>
+                          +{approvalWorkspaces.length - 6} more in Full Action Center <ChevronRight className="h-3 w-3" />
+                        </Link>
+                      )}
                     </div>
                   )
                 )}
@@ -645,12 +652,12 @@ export default function DashboardPage() {
                     </div>
                   ) : (
                     <div className="flex flex-col gap-1.5">
-                      {visibleBacItems.slice(0, 8).map((item) => {
+                      {visibleBacItems.slice(0, 6).map((item) => {
                         const { color, bg } = ruleColorVars(item.ruleKey);
                         const link = actionLink(item);
                         return (
                           <div key={item.id}
-                            className="flex items-center gap-3 rounded-lg px-3 py-2.5"
+                            className="flex items-center gap-3 rounded-lg px-3 py-2"
                             style={{ backgroundColor: bg, border: `1px solid ${color}20` }}>
                             <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium whitespace-nowrap"
                               style={{ color }}>
@@ -683,11 +690,11 @@ export default function DashboardPage() {
                           </div>
                         );
                       })}
-                      {visibleBacItems.length > 8 && (
+                      {visibleBacItems.length > 6 && (
                         <Link href="/action-center"
                           className="flex items-center justify-center gap-1 rounded-lg py-2 text-xs font-medium"
                           style={{ backgroundColor: 'var(--bg-subtle)', color: 'var(--accent-primary)' }}>
-                          +{visibleBacItems.length - 8} more in Full Action Center <ChevronRight className="h-3 w-3" />
+                          +{visibleBacItems.length - 6} more in Full Action Center <ChevronRight className="h-3 w-3" />
                         </Link>
                       )}
                     </div>
@@ -698,8 +705,11 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* ── 3. Workspace Health + My Work ── */}
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+        {/* ── 3. Workspace Health + My Work ──
+             items-start: cards size to their own content, so a short Workspace Health table
+             (e.g. a single workspace) never gets stretched to match a taller My Work card, or
+             vice versa — avoids the large blank area a default grid stretch would leave. ── */}
+        <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-3">
 
           {/* Workspace Health (2/3) */}
           {workspaceStatusRows.length > 0 && (
@@ -926,12 +936,12 @@ export default function DashboardPage() {
                   <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No recent business activity.</p>
                 </div>
               ) : (
-                recentActivity.slice(0, 8).map((a) => {
+                recentActivity.slice(0, 5).map((a) => {
                   const cleanType = a.entityType
                     .replace('NCR_CAPA', 'Issue').replace(/_/g, ' ')
                     .toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
                   return (
-                    <div key={a.id} className="flex items-start gap-3 px-5 py-3">
+                    <div key={a.id} className="flex items-start gap-3 px-5 py-2.5">
                       <div className="h-6 w-6 rounded-full flex items-center justify-center shrink-0 text-xs font-medium"
                         style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent-primary)' }}>
                         {a.actor.fullName.charAt(0).toUpperCase()}
@@ -957,7 +967,7 @@ export default function DashboardPage() {
                 </div>
               ) : (
                 notificationSummary.recent.slice(0, 5).map((n) => (
-                  <div key={n.id} className="flex items-start gap-2 px-5 py-3">
+                  <div key={n.id} className="flex items-start gap-2 px-5 py-2.5">
                     {!n.readAt && (
                       <div className="mt-1.5 h-1.5 w-1.5 rounded-full shrink-0"
                         style={{ backgroundColor: 'var(--accent-primary)' }} />

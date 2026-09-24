@@ -242,6 +242,18 @@ Dashboard design rules:
 - Use clear drill-down links
 - Show urgent/overdue items clearly
 
+### Super User / Elevated Dashboard ("Operations Control Center") Layout
+
+Order, top to bottom, sized to minimize scrolling on a 1920x1080 desktop:
+
+1. Header (title, subtitle, Live/Offline + "Updated Xm ago", refresh icon).
+2. KPI row — 6 compact cards, one row at `xl:` (≥1280px): Active Workspaces, Open Tasks, Awaiting Review, Overdue Tasks, Open Issues, Expiring/Expired Files.
+3. Action Center — full width, height capped: max 6 items shown per tab (Approvals tab included), "+N more in Full Action Center" footer when more exist, compact row height (`py-2`). Tabs: All / Tasks / Approvals / Documents / Issues / Expiry.
+4. Workspace Health (2/3 width) + My Work (1/3 width), side by side — uses `items-start` on the row so a short table (e.g. one workspace) or a short task list is never stretched to match its taller sibling; this is what prevents a large blank area inside the shorter card.
+5. Business Activity / Notifications (tabbed, full width) — activity tab capped at 5 items, "View all" link to the relevant page for the full feed.
+
+Any card whose row uses CSS Grid must set `items-start` unless equal-height stretching is genuinely wanted — the default `align-items: stretch` is what causes short cards to reserve blank space next to a taller sibling.
+
 ### ISO Workspace Layout
 
 Header:
@@ -272,6 +284,21 @@ Main content:
 - Subtask count
 - Due date
 - Add task row
+
+### Workspace Overview Layout
+
+The Overview tab uses a wide (`max-w-6xl`) compact responsive grid, not a narrow single-column stack, so the first screen at desktop resolution shows most workspace state without scrolling.
+
+Order, top to bottom:
+
+1. Workspace Status panel (full width) — compact rows, clickable alert actions.
+2. Optional "My Work" panel(s) (full width, conditional).
+3. Summary grid: `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3`, `items-start`, `gap-4` — **masonry-like, not a uniform card grid**: each grid cell is an independent vertical stack so a short card never inherits a tall sibling's row height (this is what removes the blank-space problem a plain equal-height grid has).
+   - Column 1 (`flex flex-col gap-4`): Task Summary, Issues & Actions.
+   - Column 2 (`flex flex-col gap-4`): Documents, Team.
+   - Column 3: Recent Activity card (`sm:col-span-2 lg:col-span-1` — spans full width on tablet's 2-col row, is its own column on desktop's 3-col row so it sits high on the page rather than below everything else). Capped at 5 items with a "View all →" link to the Activity tab.
+
+There is no "Quick Links" section — it duplicated the top view tabs (Tasks/Documents/Issues & Actions/Members/Activity) and was removed. Use the tabs for navigation, not a duplicate link list on the Overview page.
 
 ### Active Task List Selection Rule
 

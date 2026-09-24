@@ -149,10 +149,22 @@ export interface WorkspaceActivityEntry {
   createdAt: string;
 }
 
+import type { FileExpiryStatus } from '@/components/status-badge';
+
 export interface TaskUser {
   id: string;
   fullName: string;
   email?: string;
+}
+
+// File expiry — derived from FileAttachment.expiryDate (entityType='TASK').
+// Deliberately separate from Task.dueDate.
+export interface FileExpirySummary {
+  status: FileExpiryStatus;
+  expiryDate: string | null;
+  daysLeft: number | null;
+  fileName: string | null;
+  attachmentId: string | null;
 }
 
 export interface TaskSummary {
@@ -173,6 +185,7 @@ export interface TaskSummary {
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  fileExpiry: FileExpirySummary | null;
   taskList: { id: string; name: string };
   _count: { subtasks: number; comments: number };
   recurrenceInterval: string;

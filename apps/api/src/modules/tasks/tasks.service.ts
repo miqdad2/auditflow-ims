@@ -19,6 +19,8 @@ import {
   TASK_STATUS_REASON_REQUIRED,
   TASK_STATUS_REOPEN_SOURCES,
   TaskApprovalStatus,
+  FileExpiryStatus,
+  DEFAULT_FILE_EXPIRY_REMINDER_DAYS,
 } from '@auditflow/shared';
 
 const ELEVATED_ROLES = ['SUPER_ADMIN', 'IT_ADMIN', 'ISO_MANAGER', 'QHSE_USER', 'SUPER_USER'];
@@ -84,6 +86,14 @@ const TASK_INCLUDE = {
   workspace: { select: { id: true, name: true } },
   _count:    { select: { subtasks: true, comments: true } },
 } as const;
+
+export interface FileExpirySummary {
+  status: FileExpiryStatus;
+  expiryDate: string | null;
+  daysLeft: number | null;
+  fileName: string | null;
+  attachmentId: string | null;
+}
 
 @Injectable()
 export class TasksService {
@@ -173,10 +183,77 @@ export class TasksService {
       }
     }
 
-    return this.prisma.task.findMany({
+    const tasks = await this.prisma.task.findMany({
       where,
       orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
       include: TASK_INCLUDE,
+    });
+
+    return this.attachFileExpiry(tasks);
+  }
+
+  /**
+   * Attaches a `fileExpiry` summary to each task, derived from that task's
+   * FileAttachment.expiryDate (entityType='TASK') — deliberately separate from
+   * Task.dueDate. Mirrors the bulk-fetch pattern used in
+   * WorkspacesService.findAll() and BusinessActionsService.detectExpiredFiles().
+   *
+   * - No attachments at all → fileExpiry: null (rendered as '—', no badge).
+   * - Has attachment(s) but none carry an expiryDate → MISSING_EXPIRY_DATE.
+   * - Has attachment(s) with expiryDate → most urgent one wins:
+   *   EXPIRED (most overdue first) > EXPIRING_SOON (soonest first, within
+   *   reminderDays) > VALID (soonest first).
+   */
+  private async attachFileExpiry<T extends { id: string }>(tasks: T[]): Promise<(T & { fileExpiry: FileExpirySummary | null })[]> {
+    if (tasks.length === 0) return [];
+
+    const taskIds = tasks.map((t) => t.id);
+    const attachments = await this.prisma.fileAttachment.findMany({
+      where: { entityType: 'TASK', entityId: { in: taskIds }, isSuperseded: false },
+      select: { id: true, entityId: true, expiryDate: true, reminderDays: true, displayName: true, originalFileName: true },
+    });
+
+    const byTask = new Map<string, typeof attachments>();
+    for (const a of attachments) {
+      const arr = byTask.get(a.entityId) ?? [];
+      arr.push(a);
+      byTask.set(a.entityId, arr);
+    }
+
+    const now = new Date();
+    const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+    const rank = (status: FileExpiryStatus) =>
+      status === FileExpiryStatus.EXPIRED ? 0 :
+      status === FileExpiryStatus.EXPIRING_SOON ? 1 :
+      status === FileExpiryStatus.VALID ? 2 : 3;
+
+    return tasks.map((task) => {
+      const files = byTask.get(task.id) ?? [];
+      if (files.length === 0) return { ...task, fileExpiry: null };
+
+      const summaries: FileExpirySummary[] = files.map((f) => {
+        const name = f.displayName ?? f.originalFileName;
+        if (!f.expiryDate) {
+          return { status: FileExpiryStatus.MISSING_EXPIRY_DATE, expiryDate: null, daysLeft: null, fileName: name, attachmentId: f.id };
+        }
+        const daysLeft = Math.ceil((f.expiryDate.getTime() - now.getTime()) / MS_PER_DAY);
+        const reminderDays = f.reminderDays ?? DEFAULT_FILE_EXPIRY_REMINDER_DAYS;
+        const status =
+          daysLeft < 0 ? FileExpiryStatus.EXPIRED :
+          daysLeft <= reminderDays ? FileExpiryStatus.EXPIRING_SOON :
+          FileExpiryStatus.VALID;
+        return { status, expiryDate: f.expiryDate.toISOString(), daysLeft, fileName: name, attachmentId: f.id };
+      });
+
+      // Pick the most urgent: lowest rank, then soonest daysLeft (most negative for EXPIRED first).
+      summaries.sort((a, b) => {
+        const r = rank(a.status) - rank(b.status);
+        if (r !== 0) return r;
+        return (a.daysLeft ?? Infinity) - (b.daysLeft ?? Infinity);
+      });
+
+      return { ...task, fileExpiry: summaries[0] };
     });
   }
 

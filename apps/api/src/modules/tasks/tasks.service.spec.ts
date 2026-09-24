@@ -168,6 +168,8 @@ const mockPrisma = {
   },
   taskList:      { findUnique: jest.fn() },
   taskComment:   { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), update: jest.fn(), delete: jest.fn() },
+  // Used by attachFileExpiry() to derive per-task fileExpiry summaries in findMany()
+  fileAttachment: { findMany: jest.fn().mockResolvedValue([]) },
   activityEvent: { create: jest.fn() },
   user:          { findUnique: jest.fn().mockResolvedValue(null), findMany: jest.fn() },
   // workspace.findUnique is called to enrich TASK_ASSIGNED notification messages
@@ -1153,6 +1155,7 @@ describe('TasksService — Unit 61 task visibility policy', () => {
     mockPrisma.user.findUnique.mockResolvedValue(null);
     mockWorkspaces.assertWorkspaceAccess.mockResolvedValue(undefined);
     mockWorkspaces.buildWorkspaceVisibilityWhere.mockReturnValue({});
+    mockPrisma.fileAttachment.findMany.mockResolvedValue([]);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -1273,6 +1276,7 @@ describe('TasksService — Unit 61.1 workspace-scoped query regression', () => {
     mockWorkspaces.buildWorkspaceVisibilityWhere.mockReturnValue({
       OR: [{ workspaceId: null }, { workspace: { members: { some: { userId: 'staff-1' } } } }],
     });
+    mockPrisma.fileAttachment.findMany.mockResolvedValue([]);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -1888,6 +1892,7 @@ describe('TasksService — Unit 66.3.2 subtask hierarchy exclusion', () => {
     mockWorkspaces.assertWorkspaceAccess.mockResolvedValue(undefined);
     mockWorkspaces.assertCanBeAssigned.mockResolvedValue(undefined);
     mockWorkspaces.canCollaborateInWorkspace.mockResolvedValue(true);
+    mockPrisma.fileAttachment.findMany.mockResolvedValue([]);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [

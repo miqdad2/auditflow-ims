@@ -85,3 +85,26 @@ export function PriorityBadge({ priority }: { priority: string }) {
     </span>
   );
 }
+
+// File expiry — derived from FileAttachment.expiryDate, separate from task Due Date.
+export type FileExpiryStatus = 'EXPIRED' | 'EXPIRING_SOON' | 'VALID' | 'MISSING_EXPIRY_DATE';
+
+const EXPIRY_STYLES: Record<FileExpiryStatus, { bg: string; color: string; label: string }> = {
+  EXPIRED:              { bg: 'var(--state-error-soft)',   color: 'var(--state-error)',   label: 'Expired' },
+  EXPIRING_SOON:        { bg: 'var(--state-warning-soft)', color: 'var(--state-warning)', label: 'Expiring Soon' },
+  VALID:                { bg: 'var(--state-success-soft)', color: 'var(--state-success)', label: 'Valid' },
+  MISSING_EXPIRY_DATE:  { bg: 'var(--bg-muted)',            color: 'var(--text-muted)',    label: 'Missing Expiry Date' },
+};
+
+export function ExpiryBadge({ status, size = 'xs' }: { status: FileExpiryStatus; size?: 'sm' | 'xs' }) {
+  const style = EXPIRY_STYLES[status];
+  const padding = size === 'xs' ? 'px-1.5 py-0.5 text-[10px]' : 'px-2 py-0.5 text-xs';
+  return (
+    <span
+      className={`inline-flex items-center rounded-full font-medium ${padding}`}
+      style={{ backgroundColor: style.bg, color: style.color }}
+    >
+      {style.label}
+    </span>
+  );
+}
