@@ -9,6 +9,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { FileStorageService } from '../../common/file-storage.service';
 import { WorkspacesService } from '../workspaces/workspaces.service';
+import { classifyFileExpiry } from '../tasks/file-expiry.util';
 
 // Elevated roles: can access all attachments regardless of workspace/department.
 const ELEVATED_ROLES = ['SUPER_ADMIN', 'IT_ADMIN', 'ISO_MANAGER', 'QHSE_USER', 'SUPER_USER'] as const;
@@ -543,21 +544,53 @@ export class FileAttachmentsService {
     }
   }
 
-  // ── Expiry check: for Super User / Super Admin ────────────────────────────
+  // ── Expiry check: global (Super User / Super Admin) or workspace-scoped ───
 
-  async getExpiringFiles(actorId: string, actorRoles: string[]) {
-    const isElevated = actorRoles.some((r) => (ELEVATED_ROLES as readonly string[]).includes(r));
-    if (!isElevated) throw new ForbiddenException('Only elevated roles can access the expiring files list');
+  /**
+   * Flat, one-row-per-FileAttachment expiry list.
+   *
+   * - No `workspaceId`: original global behavior, unchanged — elevated roles only,
+   *   90-day window, 100-row cap. Nothing in the frontend currently calls this path.
+   * - With `workspaceId`: used by the workspace expiry-review table (fixes the
+   *   files-vs-tasks count mismatch — TasksService.attachFileExpiry collapses each
+   *   task to a single representative file, so a task with several expired files
+   *   only produced one row there). Gated by workspace membership (assertWorkspaceAccess),
+   *   not elevated-only — any user who can see the workspace's tasks can review its
+   *   expiry files. No 90-day window / no row cap (this is an authoritative per-workspace
+   *   list, not a monitoring feed) and includes files with no expiryDate set, so the
+   *   existing "Missing Expiry Date" filter keeps working.
+   */
+  async getExpiringFiles(
+    actorId: string,
+    actorRoles: string[],
+    actorDeptId: string | null = null,
+    workspaceId?: string,
+  ) {
+    let taskIdScope: string[] | undefined;
+
+    if (workspaceId) {
+      await this.workspaces.assertWorkspaceAccess(workspaceId, actorId, actorRoles, actorDeptId);
+      const wsTasks = await this.prisma.task.findMany({
+        where: { workspaceId, parentTaskId: null },
+        select: { id: true },
+      });
+      taskIdScope = wsTasks.map((t) => t.id);
+      if (taskIdScope.length === 0) return [];
+    } else {
+      const isElevated = actorRoles.some((r) => (ELEVATED_ROLES as readonly string[]).includes(r));
+      if (!isElevated) throw new ForbiddenException('Only elevated roles can access the expiring files list');
+    }
 
     const now  = new Date();
     const in90 = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
 
-    // Get all active task files with expiry date (expired or expiring within 90 days)
     const files = await this.prisma.fileAttachment.findMany({
       where: {
         entityType:   'TASK',
         isSuperseded: false,
-        expiryDate:   { not: null, lte: in90 },
+        ...(taskIdScope
+          ? { entityId: { in: taskIdScope } }
+          : { expiryDate: { not: null, lte: in90 } }),
       },
       select: {
         id: true,
@@ -573,34 +606,39 @@ export class FileAttachmentsService {
         uploadedBy:       { select: { id: true, fullName: true } },
       },
       orderBy: { expiryDate: 'asc' },
-      take: 100,
+      take: taskIdScope ? undefined : 100,
     });
 
     if (files.length === 0) return [];
 
-    // Resolve task details for each file
+    // Resolve task details for each file (includes taskList for the workspace review table)
     const taskIds = [...new Set(files.map((f) => f.entityId))];
     const tasks = await this.prisma.task.findMany({
       where: { id: { in: taskIds } },
       select: {
         id:         true,
         title:      true,
+        status:     true,
         assigneeId: true,
         workspaceId: true,
         workspace:  { select: { id: true, name: true } },
+        taskList:   { select: { id: true, name: true } },
         assignee:   { select: { id: true, fullName: true } },
       },
     });
     const taskMap = new Map(tasks.map((t) => [t.id, t]));
 
-    const nowMs = now.getTime();
-    return files.map((f) => ({
-      ...f,
-      task: taskMap.get(f.entityId) ?? null,
-      daysUntilExpiry: f.expiryDate
-        ? Math.ceil((new Date(f.expiryDate).getTime() - nowMs) / 86400000)
-        : null,
-    }));
+    return files.map((f) => {
+      const { status, daysLeft } = classifyFileExpiry(f.expiryDate, f.reminderDays, now);
+      return {
+        ...f,
+        task: taskMap.get(f.entityId) ?? null,
+        status,
+        daysLeft,
+        // Kept for backward compatibility with the original global response shape.
+        daysUntilExpiry: daysLeft,
+      };
+    });
   }
 
   async runExpiryCheck(actorId: string, actorRoles: string[]) {

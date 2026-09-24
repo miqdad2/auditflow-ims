@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Patch, Delete, Param, Body, UseGuards,
+  Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards,
   UseInterceptors, UploadedFile, Res,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -159,13 +159,20 @@ export class FileAttachmentsController {
     return this.svc.findForEntity('NCR_CAPA', id);
   }
 
-  // ─── Expiry endpoints (Super User / Super Admin) ─────────────────────────
+  // ─── Expiry endpoints ─────────────────────────────────────────────────────
+  // No workspaceId: global list, elevated roles only (Super User / Super Admin).
+  // With workspaceId: workspace-scoped expiry review, gated by workspace membership
+  // (assertWorkspaceAccess) — see FileAttachmentsService.getExpiringFiles for detail.
 
   @Get('file-attachments/expiring')
   @RequirePermissions('project.read')
-  getExpiringFiles(@CurrentUser() user: Record<string, unknown>) {
-    const actorRoles = extractUserRoles(user);
-    return this.svc.getExpiringFiles(user.id as string, actorRoles);
+  getExpiringFiles(
+    @CurrentUser() user: Record<string, unknown>,
+    @Query('workspaceId') workspaceId?: string,
+  ) {
+    const actorRoles  = extractUserRoles(user);
+    const actorDeptId = (user.departmentId as string | null) ?? null;
+    return this.svc.getExpiringFiles(user.id as string, actorRoles, actorDeptId, workspaceId);
   }
 
   @Post('file-attachments/expiry-check')

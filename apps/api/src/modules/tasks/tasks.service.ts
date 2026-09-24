@@ -14,13 +14,13 @@ import { CreateCommentDto } from './dto/create-comment.dto';
 import { UpdateCommentDto } from './dto/update-comment.dto';
 import { extractUserPermissions, extractUserRoles } from '../../common/permissions.guard';
 import { RealtimeService } from '../realtime/realtime.service';
+import { classifyFileExpiry } from './file-expiry.util';
 import {
   TASK_STATUS_TRANSITIONS,
   TASK_STATUS_REASON_REQUIRED,
   TASK_STATUS_REOPEN_SOURCES,
   TaskApprovalStatus,
   FileExpiryStatus,
-  DEFAULT_FILE_EXPIRY_REMINDER_DAYS,
 } from '@auditflow/shared';
 
 const ELEVATED_ROLES = ['SUPER_ADMIN', 'IT_ADMIN', 'ISO_MANAGER', 'QHSE_USER', 'SUPER_USER'];
@@ -221,7 +221,6 @@ export class TasksService {
     }
 
     const now = new Date();
-    const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
     const rank = (status: FileExpiryStatus) =>
       status === FileExpiryStatus.EXPIRED ? 0 :
@@ -234,16 +233,8 @@ export class TasksService {
 
       const summaries: FileExpirySummary[] = files.map((f) => {
         const name = f.displayName ?? f.originalFileName;
-        if (!f.expiryDate) {
-          return { status: FileExpiryStatus.MISSING_EXPIRY_DATE, expiryDate: null, daysLeft: null, fileName: name, attachmentId: f.id };
-        }
-        const daysLeft = Math.ceil((f.expiryDate.getTime() - now.getTime()) / MS_PER_DAY);
-        const reminderDays = f.reminderDays ?? DEFAULT_FILE_EXPIRY_REMINDER_DAYS;
-        const status =
-          daysLeft < 0 ? FileExpiryStatus.EXPIRED :
-          daysLeft <= reminderDays ? FileExpiryStatus.EXPIRING_SOON :
-          FileExpiryStatus.VALID;
-        return { status, expiryDate: f.expiryDate.toISOString(), daysLeft, fileName: name, attachmentId: f.id };
+        const { status, daysLeft } = classifyFileExpiry(f.expiryDate, f.reminderDays, now);
+        return { status, expiryDate: f.expiryDate ? f.expiryDate.toISOString() : null, daysLeft, fileName: name, attachmentId: f.id };
       });
 
       // Pick the most urgent: lowest rank, then soonest daysLeft (most negative for EXPIRED first).

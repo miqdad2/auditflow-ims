@@ -8,7 +8,7 @@ import {
   Search, Lock, Globe, Building2,
   AlertTriangle, AlertCircle, CheckCircle2, Clock, FileCheck, RefreshCw,
   ShieldAlert, Wifi, WifiOff, UserCircle, TrendingUp, Pencil, Settings,
-  MessageSquare, GitBranch,
+  MessageSquare, GitBranch, Download,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -24,8 +24,10 @@ import { WorkspaceDocumentsTab } from '@/features/workspaces/workspace-documents
 import { WorkspaceNcrTab } from '@/features/workspaces/workspace-ncr-tab';
 import type {
   WorkspaceDetail, TaskListSummary, TaskSummary,
-  WorkspaceOverviewData, WorkspaceActivityEntry,
+  WorkspaceOverviewData, WorkspaceActivityEntry, ExpiryFileRow,
 } from '@/features/workspaces/types';
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
 type WorkspaceTab = 'overview' | 'tasks' | 'members' | 'activity' | 'documents' | 'ncr';
 type TaskFilter = 'all' | 'mine' | 'overdue' | 'unassigned' | 'waiting_review' | 'returned' | 'reference' | 'completed' | 'pending_approval';
@@ -209,6 +211,12 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
   // null = no sub-filter (show all lists' matches). Purely client-side over the already-loaded
   // all-lists dataset — never triggers a refetch, so counts always match visible rows.
   const [expiryListScope, setExpiryListScope] = useState<string | null>(null);
+  // Flat, one-row-per-FileAttachment expiry review data — fetched only while expiryFilter !== 'all'.
+  // Replaces the task-row table in that mode so the row count matches Workspace Status's file count
+  // exactly (a task can carry multiple expired files; the main task table only shows one per task).
+  const [expiryFiles, setExpiryFiles]           = useState<ExpiryFileRow[]>([]);
+  const [expiryFilesLoading, setExpiryFilesLoading] = useState(false);
+  const [expiryFilesError, setExpiryFilesError]     = useState('');
   const [createTaskInitialTitle, setCreateTaskInitialTitle] = useState<string | undefined>(undefined);
   const [openMenuId, setOpenMenuId]         = useState<string | null>(null);
   const [moveTaskId, setMoveTaskId]         = useState<string | null>(null);
@@ -470,6 +478,27 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
   // selectedListId kept in the effect below so the effect still fires on list-click.
   }, [token, workspaceId]);
 
+  // Flat, workspace-scoped, one-row-per-file expiry data — powers the expiry-review table
+  // whenever expiryFilter !== 'all'. Always workspace-wide (never taskListId-scoped); list
+  // scoping is applied client-side (same pattern as expiryListScope), so switching lists
+  // while reviewing doesn't require a refetch.
+  const loadExpiryFiles = useCallback(async () => {
+    if (!token) return;
+    setExpiryFilesLoading(true);
+    setExpiryFilesError('');
+    try {
+      const data = await apiGet<ExpiryFileRow[]>(
+        `/file-attachments/expiring?workspaceId=${workspaceId}`,
+        token,
+      );
+      setExpiryFiles(data);
+    } catch (err) {
+      setExpiryFilesError(err instanceof Error ? err.message : 'Failed to load expiry review data.');
+    } finally {
+      setExpiryFilesLoading(false);
+    }
+  }, [token, workspaceId]);
+
   const loadMembers = useCallback(async () => {
     if (!token) return;
     setMembersLoading(true);
@@ -518,6 +547,9 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
 
   useEffect(() => { void loadWorkspace(); }, [loadWorkspace]);
   useEffect(() => { if (selectedListId) void loadTasks(); }, [loadTasks, selectedListId]);
+  // Fetch the flat expiry-file list only while actually reviewing expiry — avoids an extra
+  // request on every normal Tasks-tab visit. Independent of selectedListId (always workspace-wide).
+  useEffect(() => { if (expiryFilter !== 'all') void loadExpiryFiles(); }, [loadExpiryFiles, expiryFilter]);
 
   // Set default task filter based on role: Members default to "My Tasks"; elevated/managers default to "All".
   // Only set on initial workspace load (once workspace.myRole is known) and not when a URL deep-link overrides.
@@ -604,25 +636,54 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
     return tasks.filter((t) => t.fileExpiry?.status === 'MISSING_EXPIRY_DATE').length;
   }
 
-  // Task-list breakdown for the expiry review chips (req. #8) — purely client-side over the
-  // already-loaded All Lists dataset, so counts always match what's actually rendered (req. #6).
+  // Task-list breakdown for the expiry review chips (req. #8) — counts FILES, not tasks,
+  // from the flat expiryFiles dataset, so "LAB: 18" means 18 files, matching Workspace
+  // Status's file-granular count exactly (a task can carry multiple expired files).
   const expiryListBreakdown = useMemo(() => {
     if (selectedListId !== ALL_LISTS_ID || expiryFilter === 'all') return [];
-    const statusMatch = (t: TaskSummary) =>
-      expiryFilter === 'expired' ? t.fileExpiry?.status === 'EXPIRED' :
-      expiryFilter === 'expiring_soon' ? t.fileExpiry?.status === 'EXPIRING_SOON' :
-      t.fileExpiry?.status === 'MISSING_EXPIRY_DATE';
+    const statusMatch = (f: ExpiryFileRow) =>
+      expiryFilter === 'expired' ? f.status === 'EXPIRED' :
+      expiryFilter === 'expiring_soon' ? f.status === 'EXPIRING_SOON' :
+      f.status === 'MISSING_EXPIRY_DATE';
     const counts = new Map<string, { name: string; count: number }>();
-    for (const t of tasks) {
-      if (!statusMatch(t)) continue;
-      const entry = counts.get(t.taskList.id) ?? { name: t.taskList.name, count: 0 };
+    for (const f of expiryFiles) {
+      if (!f.task?.taskList || !statusMatch(f)) continue;
+      const entry = counts.get(f.task.taskList.id) ?? { name: f.task.taskList.name, count: 0 };
       entry.count += 1;
-      counts.set(t.taskList.id, entry);
+      counts.set(f.task.taskList.id, entry);
     }
     return Array.from(counts.entries())
       .map(([id, v]) => ({ id, name: v.name, count: v.count }))
       .sort((a, b) => b.count - a.count);
-  }, [tasks, selectedListId, expiryFilter]);
+  }, [expiryFiles, selectedListId, expiryFilter]);
+
+  // Filtered, list-scoped expiry file rows for the review table itself — same list-scoping
+  // pattern already used for the (now-unused-in-this-mode) task rows.
+  const filteredExpiryFiles = useMemo(() => {
+    let list = expiryFiles.filter((f) => {
+      if (expiryFilter === 'expired')       return f.status === 'EXPIRED';
+      if (expiryFilter === 'expiring_soon') return f.status === 'EXPIRING_SOON';
+      if (expiryFilter === 'missing')       return f.status === 'MISSING_EXPIRY_DATE';
+      return true;
+    });
+    if (selectedListId === ALL_LISTS_ID) {
+      if (expiryListScope) list = list.filter((f) => f.task?.taskList?.id === expiryListScope);
+    } else if (selectedListId) {
+      list = list.filter((f) => f.task?.taskList?.id === selectedListId);
+    }
+    if (taskSearch.trim()) {
+      const q = taskSearch.toLowerCase();
+      list = list.filter((f) =>
+        (f.displayName ?? f.originalFileName).toLowerCase().includes(q) ||
+        (f.task?.title ?? '').toLowerCase().includes(q));
+    }
+    return [...list].sort((a, b) => {
+      const rank = (s: string) => s === 'EXPIRED' ? 0 : s === 'EXPIRING_SOON' ? 1 : s === 'VALID' ? 2 : 3;
+      const r = rank(a.status) - rank(b.status);
+      if (r !== 0) return r;
+      return (a.daysLeft ?? Infinity) - (b.daysLeft ?? Infinity);
+    });
+  }, [expiryFiles, expiryFilter, selectedListId, expiryListScope, taskSearch]);
 
   function filterCount(f: TaskFilter) {
     const now = nowRef.current;
@@ -1142,6 +1203,23 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
     setExpiryFilter(status);
     setTaskSort('expiry-urgency');
     setShowExpiryBanner(true);
+  }
+
+  // Same pattern as FileAttachmentSection.downloadAttachment — the download endpoint is
+  // JWT-protected, so it can't be a plain <a href>; fetch with the auth header and save as a blob.
+  function downloadExpiryFile(fileId: string, filename: string) {
+    if (!token) return;
+    fetch(`${API_URL}/attachments/${fileId}/download`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((res) => res.blob())
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+      })
+      .catch(() => showToast('Failed to download file.'));
   }
 
   const selectedList = workspace?.taskLists.find((tl) => tl.id === selectedListId) ?? null;
@@ -2677,8 +2755,9 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                 )}
 
                 {/* Single-list scope note while an expiry filter is active (req. #6) — explains why
-                    the count here differs from the workspace-wide total, with a one-click escape hatch */}
-                {selectedListId !== ALL_LISTS_ID && expiryFilter !== 'all' && filteredTasks.length > 0 && (() => {
+                    the count here differs from the workspace-wide total, with a one-click escape hatch.
+                    Counts FILES (filteredExpiryFiles), not task rows — matches Workspace Status exactly. */}
+                {selectedListId !== ALL_LISTS_ID && expiryFilter !== 'all' && filteredExpiryFiles.length > 0 && (() => {
                   const wsTotal = expiryFilter === 'expired' ? (workspace.metrics?.expiredFiles ?? 0)
                     : expiryFilter === 'expiring_soon' ? (workspace.metrics?.expiringFiles ?? 0)
                     : null;
@@ -2687,7 +2766,7 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                     <div className="flex items-center justify-between gap-3 border-b px-4 py-2"
                       style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-subtle)' }}>
                       <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                        Showing {filteredTasks.length} {label} file{filteredTasks.length !== 1 ? 's' : ''} in {selectedList?.name ?? 'this list'}.
+                        Showing {filteredExpiryFiles.length} {label} file{filteredExpiryFiles.length !== 1 ? 's' : ''} in {selectedList?.name ?? 'this list'}.
                         {wsTotal !== null && ` ${wsTotal} ${label} file${wsTotal !== 1 ? 's' : ''} exist across this workspace.`}
                       </p>
                       <button type="button" onClick={() => setSelectedListId(ALL_LISTS_ID)}
@@ -2741,8 +2820,10 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                       title="Filter by file expiry status"
                     >
                       <option value="all">Expiry: All</option>
-                      <option value="expired">Expired ({expiryFilterCount('expired')})</option>
-                      <option value="expiring_soon">Expiring Soon ({expiryFilterCount('expiring_soon')})</option>
+                      {/* File counts (req. #10) — sourced from workspace.metrics, the same
+                          file-granular count Workspace Status shows, not a task-row count */}
+                      <option value="expired">Expired ({workspace.metrics?.expiredFiles ?? 0})</option>
+                      <option value="expiring_soon">Expiring Soon ({workspace.metrics?.expiringFiles ?? 0})</option>
                       <option value="missing">Missing Expiry Date ({expiryFilterCount('missing')})</option>
                     </select>
                     {/* Sort dropdown */}
@@ -2786,8 +2867,8 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                   </div>
                 )}
 
-                {/* Reorder hint — shown to collaborators when not in manual-all mode */}
-                {canCollaborate && !isReorderEnabled && tasks.length > 1 && (
+                {/* Reorder hint — shown to collaborators when not in manual-all mode (never in expiry-review/file-row mode) */}
+                {canCollaborate && !isReorderEnabled && expiryFilter === 'all' && tasks.length > 1 && (
                   <div className="flex items-center gap-2 border-b px-4 py-1.5"
                     style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-subtle)' }}>
                     <span className="text-[10px]" style={{ color: 'var(--text-disabled)' }}>
@@ -2796,9 +2877,131 @@ export default function WorkspaceDetailClient({ params }: WorkspaceClientProps) 
                   </div>
                 )}
 
-                {/* Task table */}
+                {/* Task table — or, while reviewing expiry, the file-row expiry-review table (req. #2).
+                    One row per FileAttachment (not per task), so the count always matches
+                    Workspace Status's file-granular "N files expired" exactly (req. #6/#10). */}
                 <div className="flex-1 overflow-y-auto">
-                  {tasksLoading ? (
+                  {expiryFilter !== 'all' ? (
+                    expiryFilesLoading ? (
+                      <div className="flex items-center justify-center py-16">
+                        <Loader2 className="h-5 w-5 animate-spin" style={{ color: 'var(--accent-primary)' }} />
+                      </div>
+                    ) : expiryFilesError ? (
+                      <div className="flex flex-col items-center justify-center gap-2 py-16">
+                        <AlertCircle className="h-8 w-8" style={{ color: 'var(--state-error)' }} />
+                        <p className="text-sm" style={{ color: 'var(--state-error)' }}>{expiryFilesError}</p>
+                        <button type="button" onClick={() => void loadExpiryFiles()}
+                          className="mt-1 flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium"
+                          style={{ backgroundColor: 'var(--bg-subtle)', color: 'var(--text-secondary)' }}>
+                          <RefreshCw className="h-4 w-4" /> Retry
+                        </button>
+                      </div>
+                    ) : filteredExpiryFiles.length === 0 && selectedListId !== ALL_LISTS_ID ? (
+                      /* req. #11-equivalent for file rows — empty state with an escape hatch */
+                      <div className="flex flex-col items-center justify-center gap-2 py-16">
+                        <CheckSquare className="h-8 w-8" style={{ color: 'var(--text-disabled)' }} />
+                        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                          No {expiryFilter === 'expired' ? 'expired' : expiryFilter === 'expiring_soon' ? 'expiring' : 'missing-expiry'} files found in {selectedList?.name ?? 'this list'}.
+                        </p>
+                        <p className="text-xs" style={{ color: 'var(--text-disabled)' }}>View all expired files across this workspace.</p>
+                        <button type="button" onClick={() => setSelectedListId(ALL_LISTS_ID)}
+                          className="mt-1 flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-white"
+                          style={{ backgroundColor: 'var(--accent-primary)' }}>
+                          View All Expired Files
+                        </button>
+                      </div>
+                    ) : filteredExpiryFiles.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center gap-2 py-16">
+                        <CheckSquare className="h-8 w-8" style={{ color: 'var(--text-disabled)' }} />
+                        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                          No {expiryFilter === 'expired' ? 'expired' : expiryFilter === 'expiring_soon' ? 'expiring' : 'missing-expiry'} files found across this workspace.
+                        </p>
+                      </div>
+                    ) : (
+                      <table className="w-full border-collapse">
+                        <thead>
+                          <tr style={{ borderBottom: '1px solid var(--border-default)' }}>
+                            {['File', 'Linked Task', 'Task List', 'Expiry Status', 'Expiry Date', 'Days Left / Overdue', 'Uploaded By', 'Created', ''].map((h) => (
+                              <th key={h} className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide"
+                                style={{ color: 'var(--text-muted)', backgroundColor: 'var(--bg-subtle)' }}>
+                                {h}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredExpiryFiles.map((f) => {
+                            const highlightColor =
+                              f.status === 'EXPIRED' ? { borderLeft: '3px solid var(--state-error)', backgroundColor: 'var(--state-error-soft)' } :
+                              f.status === 'EXPIRING_SOON' ? { borderLeft: '3px solid var(--state-warning)', backgroundColor: 'var(--state-warning-soft)' } :
+                              f.status === 'MISSING_EXPIRY_DATE' ? { borderLeft: '3px solid var(--border-strong)', backgroundColor: 'var(--bg-muted)' } :
+                              undefined;
+                            const fileName = f.displayName ?? f.originalFileName;
+                            const taskLink = f.task ? `/workspaces/${workspaceId}?task=${f.task.id}` : null;
+                            return (
+                              <tr key={f.id} style={{ borderBottom: '1px solid var(--border-subtle)', ...highlightColor }}>
+                                <td className="px-4 py-3 text-sm font-medium" style={{ color: 'var(--text-primary)', maxWidth: '220px' }}>
+                                  <span className="line-clamp-1" title={fileName}>{fileName}</span>
+                                </td>
+                                <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-secondary)', maxWidth: '180px' }}>
+                                  {f.task ? (
+                                    <button type="button"
+                                      onClick={() => { setHighlightedFileId(f.id); setSelectedTaskId(f.task!.id); }}
+                                      className="line-clamp-1 text-left hover:underline" style={{ color: 'var(--accent-primary)' }} title={f.task.title}>
+                                      {f.task.title}
+                                    </button>
+                                  ) : <span style={{ color: 'var(--text-disabled)' }}>—</span>}
+                                </td>
+                                <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>
+                                  {f.task?.taskList?.name ?? '—'}
+                                </td>
+                                <td className="px-4 py-3 text-xs"><ExpiryBadge status={f.status} size="xs" /></td>
+                                <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>{formatDate(f.expiryDate)}</td>
+                                <td className="px-4 py-3 text-xs"
+                                  style={{ color: f.status === 'EXPIRED' ? 'var(--state-error)' : f.status === 'EXPIRING_SOON' ? 'var(--state-warning)' : 'var(--text-muted)' }}>
+                                  {formatDaysLeft(f.daysLeft)}
+                                </td>
+                                <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>{f.uploadedBy?.fullName ?? '—'}</td>
+                                <td className="px-4 py-3 text-xs hidden lg:table-cell" style={{ color: 'var(--text-muted)' }}>
+                                  {formatDate(f.createdAt)}
+                                </td>
+                                <td className="px-2 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                                  <div className="flex items-center justify-end gap-1">
+                                    {taskLink && (
+                                      <button type="button" title="View linked task"
+                                        onClick={() => { setHighlightedFileId(f.id); setSelectedTaskId(f.task!.id); }}
+                                        className="rounded p-1" style={{ color: 'var(--text-muted)' }}>
+                                        <Eye className="h-3.5 w-3.5" />
+                                      </button>
+                                    )}
+                                    <button type="button" title="Download file"
+                                      onClick={() => downloadExpiryFile(f.id, fileName)}
+                                      className="rounded p-1" style={{ color: 'var(--text-muted)' }}>
+                                      <Download className="h-3.5 w-3.5" />
+                                    </button>
+                                    {f.task && (
+                                      <>
+                                        <button type="button" title="Renew / Set Expiry Date"
+                                          onClick={() => { setHighlightedFileId(f.id); setSelectedTaskId(f.task!.id); }}
+                                          className="rounded p-1" style={{ color: 'var(--text-muted)' }}>
+                                          <RefreshCw className="h-3.5 w-3.5" />
+                                        </button>
+                                        <button type="button" title="Create Renewal Task"
+                                          onClick={() => { setCreateTaskInitialTitle(`Renew: ${fileName}`); setShowCreateTask(true); }}
+                                          className="rounded p-1" style={{ color: 'var(--text-muted)' }}>
+                                          <Plus className="h-3.5 w-3.5" />
+                                        </button>
+                                      </>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    )
+                  ) : tasksLoading ? (
                     <div className="flex items-center justify-center py-16">
                       <Loader2 className="h-5 w-5 animate-spin" style={{ color: 'var(--accent-primary)' }} />
                     </div>

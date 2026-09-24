@@ -167,6 +167,36 @@ export interface FileExpirySummary {
   attachmentId: string | null;
 }
 
+// One row per FileAttachment — from GET /file-attachments/expiring?workspaceId=.
+// Distinct from FileExpirySummary above (which is per-TASK, collapsed to the single most
+// urgent file). This is the flat, file-granular shape used by the expiry-review table so
+// the row count matches the workspace's "N files expired" count exactly.
+export interface ExpiryFileRow {
+  id: string;
+  originalFileName: string;
+  displayName: string | null;
+  issueDate: string | null;
+  expiryDate: string | null;
+  reminderDays: number | null;
+  notes: string | null;
+  isSuperseded: boolean;
+  createdAt: string;
+  entityId: string;
+  uploadedBy: { id: string; fullName: string } | null;
+  status: FileExpiryStatus;
+  daysLeft: number | null;
+  task: {
+    id: string;
+    title: string;
+    status: string;
+    assigneeId: string | null;
+    workspaceId: string;
+    workspace: { id: string; name: string } | null;
+    taskList: { id: string; name: string } | null;
+    assignee: { id: string; fullName: string } | null;
+  } | null;
+}
+
 export interface TaskSummary {
   id: string;
   workspaceId: string;
